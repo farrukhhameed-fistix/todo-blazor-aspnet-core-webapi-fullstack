@@ -1,1 +1,1 @@
-# todo-blazor-fullstack
+# todo-blazor-aspnet-core-webapi-fullstack
