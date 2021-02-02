@@ -5,6 +5,6 @@
     public string AzureStorageAccountName { get; set; }
     public string AzureStorageAccountKey { get; set; }
     public string AzureStorageConnectionString { get; set; }
-    public string ProfileImageContainer { get; set; }
+    public string ImageContainer { get; set; }
   }
 }

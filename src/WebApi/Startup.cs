@@ -35,7 +35,10 @@ namespace Fistix.TaskManager.WebApi
     public void ConfigureServices(IServiceCollection services)
     {
 
-      services.AddControllers()
+      services.AddControllers(options =>
+      {
+        //options.Filters.Add(typeof(Tracing.GlobalControllerAppInsightsAttribute));
+      })
         .AddFluentValidation(x => x.RegisterValidatorsFromAssemblyContaining<CreateTodoTaskCommandValidator>());
 
       services.AddHttpContextAccessor();

@@ -13,6 +13,10 @@ using System.Security.Claims;
 using System.Threading.Tasks;
 using Fistix.TaskManager.Core.SecurityModel;
 using Fistix.TaskManager.WebApi.Filters;
+using Microsoft.ApplicationInsights.Extensibility;
+using Fistix.TaskManager.WebApi.Tracing;
+using System.Reflection;
+using System.IO;
 
 namespace Fistix.TaskManager.WebApi.Extensions
 {
@@ -27,6 +31,8 @@ namespace Fistix.TaskManager.WebApi.Extensions
       }
 
       services.AddSingleton<MasterConfig>(masterConfig);
+
+      //services.AddSingleton<ITelemetryInitializer, TelemetryRequestResponse>();
 
       services.AddScoped<ICurrentUserService, CurrentUserService>();
 
@@ -67,6 +73,11 @@ namespace Fistix.TaskManager.WebApi.Extensions
 
         c.OperationFilter<SecurityRequirementsOperationFilter>();
         c.OperationFilter<SwaggerJsonIgnorFilter>();
+
+        var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
+        var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+
+        c.IncludeXmlComments(xmlPath);
       });
 
       services

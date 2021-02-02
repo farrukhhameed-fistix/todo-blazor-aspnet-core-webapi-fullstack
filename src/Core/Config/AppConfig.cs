@@ -7,6 +7,7 @@ namespace Fistix.TaskManager.Core.Config
   public class AppConfig
   {
     public string CorsOrigins { get; set; }
-    public string DefaultCorsPolicyName { get; set; }    
+    public string DefaultCorsPolicyName { get; set; }
+    public string ApiAccessKey { get; set; }
   }
 }
