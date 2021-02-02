@@ -1,0 +1,83 @@
+﻿@page "/todo"
+@implements IDisposable
+@attribute [Authorize]
+
+@using Fistix.TaskManager.WebApp.Components
+@using Fistix.TaskManager.ViewModel.Dtos
+@using Fistix.TaskManager.ViewModel.Commands.Todos
+@using Fistix.TaskManager.ViewModel.Queries.Todos
+@using Fistix.TaskManager.WebApp.Services.StateServices
+
+@inject TodoStateService _TodoStateService
+
+<h1>Todo Tasks</h1>
+<p class="validation-message">@_errorMessage</p>
+
+<TaskListComponent Tasks="@_tasks" OnRefresh="GetAllTodos" />
+<br />
+<div class="container">
+  <CreateTaskComponent OnSubmitForm="@(e => OnCreateTask((CreateTodoTaskCommand)e))" />
+</div>
+@code {
+  private string _errorMessage = string.Empty;
+  private List<TodoTaskDto> _tasks = new List<TodoTaskDto>();
+  private List<IDisposable> _subscriptions = new List<IDisposable>();
+
+  protected override void OnInitialized()
+  {
+    RegisterSubscriptions();
+  }
+
+  private void RegisterSubscriptions()
+  {
+    _subscriptions.Add(
+     _TodoStateService.TodoTasksObservable.Subscribe(x =>
+     {
+       _tasks = x;
+       StateHasChanged();
+     })
+   );
+
+    _subscriptions.Add(
+      _TodoStateService.ApiCallResultObservable.Subscribe(x =>
+      {
+        switch (x.Operation)
+        {
+          case nameof(GetAllTodoTasksQuery):
+            if (!x.IsSucceed)
+            {
+              _errorMessage = x.Message;
+              StateHasChanged();
+            }
+            break;
+
+
+          case nameof(CreateTodoTaskCommand):
+            if (!x.IsSucceed)
+            {
+              _errorMessage = x.Message;
+              StateHasChanged();
+            }
+            break;
+        }
+      })
+    );
+  }
+
+  private void GetAllTodos()
+  {
+    _errorMessage = string.Empty;
+    _TodoStateService.GetAllTodos();
+  }
+
+  private void OnCreateTask(CreateTodoTaskCommand command)
+  {
+    _errorMessage = string.Empty;
+    _TodoStateService.CreateTodo(command);
+  }
+
+  public void Dispose()
+  {
+    _subscriptions.ForEach(x => x.Dispose());
+  }
+}

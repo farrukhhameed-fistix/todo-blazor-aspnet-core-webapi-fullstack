@@ -1,0 +1,8 @@
+﻿CREATE TABLE [dbo].[TodoTask]
+(
+  [Id] UNIQUEIDENTIFIER NOT NULL PRIMARY KEY, 
+    [Title] VARCHAR(50) NOT NULL, 
+    [Description] VARCHAR(50) NULL, 
+    [DueDate] DATETIME NOT NULL, 
+    [CreatedOn] DATETIME NOT NULL
+)

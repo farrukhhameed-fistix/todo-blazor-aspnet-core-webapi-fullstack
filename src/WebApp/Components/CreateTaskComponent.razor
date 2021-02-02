@@ -1,0 +1,41 @@
+﻿@using Fistix.TaskManager.ViewModel.Commands.Todos
+ 
+<h3>Create New Task</h3>
+
+<EditForm Model="@Command" OnValidSubmit="@OnSubmit">  
+  <FluentValidator></FluentValidator>  
+  <p>
+    <label>
+      Title:
+      <InputText id="title" @bind-Value="Command.Title" />
+      <ValidationMessage For="()=>Command.Title" />
+    </label>
+  </p>
+  <p>
+    <label>
+      Description:
+      <InputTextArea id="description" @bind-Value="Command.Description" />
+    </label>
+  </p>
+  <p>
+    <label>
+      Due Date:
+      <InputDate id="dueDate" @bind-Value="Command.DueDate" />
+      <ValidationMessage For="()=>Command.DueDate" />
+    </label>
+  </p>
+  <button class="btn btn-primary" type="submit">Submit</button>
+</EditForm>
+
+@code {
+  private CreateTodoTaskCommand Command { get; set; } = new CreateTodoTaskCommand();
+  
+  [Parameter]
+  public EventCallback OnSubmitForm { get; set; }
+
+  private void OnSubmit()
+  {
+    OnSubmitForm.InvokeAsync(Command);
+  }
+
+}

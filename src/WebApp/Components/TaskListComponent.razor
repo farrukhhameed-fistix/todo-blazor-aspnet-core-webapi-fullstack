@@ -1,0 +1,48 @@
+﻿@using Fistix.TaskManager.ViewModel.Dtos
+<table class="table">
+  <thead>
+    <tr>
+      <th>Id</th>
+      <th>Title</th>
+      <th>DueDate</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    @foreach (var task in Tasks)
+    {
+    <tr>
+      <td>
+        @task.Id
+      </td>
+      <td>
+        @task.Title
+      </td>
+      <td>
+        @task.DueDate
+      </td>
+      <td>
+        @task.Status
+      </td>
+    </tr>
+    }
+  </tbody>
+</table>
+<button class="btn btn-primary" @onclick="OnRefreshClick">Refresh</button>
+
+@code {
+
+  [Parameter]
+  public List<TodoTaskDto> Tasks { get; set; }
+
+  [Parameter]
+  public EventCallback OnRefresh { get; set; }
+
+
+  private void OnRefreshClick()
+  {
+    if(OnRefresh.HasDelegate)
+      OnRefresh.InvokeAsync();
+  }
+
+}
