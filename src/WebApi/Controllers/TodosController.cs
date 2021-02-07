@@ -18,7 +18,7 @@ namespace Fistix.TaskManager.WebApi.Controllers
   [Authorize]
   public class TodosController : ControllerBase
   {
-    private readonly IMediator _mediator;
+    private readonly IMediator _mediator = null;
 
     public TodosController(IMediator mediator)
     {
