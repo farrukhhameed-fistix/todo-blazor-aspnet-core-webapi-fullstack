@@ -383,16 +383,17 @@ public class AiController : ControllerBase
     }
 
     /// <summary>
-    /// Plans an optimized sprint from high/medium incomplete todos using an AI agent.
+    /// Starts an async sprint optimizer job. Progress is pushed over SignalR; poll get/active for status.
     /// </summary>
     [HttpPost("agent/sprint-optimizer")]
     [EnableRateLimiting(RateLimitPolicies.AiAgents)]
-    [ProducesResponseType(typeof(OptimizeSprintResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(SprintOptimizerJobDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
-    public async Task<ActionResult<OptimizeSprintResponseDto>> OptimizeSprint(
+    public async Task<ActionResult<SprintOptimizerJobDto>> OptimizeSprint(
         [FromBody] OptimizeSprintCommand command)
     {
         if (!ModelState.IsValid)
@@ -416,7 +417,7 @@ public class AiController : ControllerBase
         }
         catch (InvalidOperationException ex)
         {
-            return BadRequest(ex.Message);
+            return Conflict(new ProblemDetails { Title = "Cannot start sprint optimizer", Detail = ex.Message });
         }
         catch (ForbiddenAccessException)
         {
@@ -424,8 +425,68 @@ public class AiController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error running sprint optimizer agent");
-            return ApiErrorResponses.UnexpectedError(HttpContext, "Failed to optimize sprint");
+            _logger.LogError(ex, "Error starting sprint optimizer agent");
+            return ApiErrorResponses.UnexpectedError(HttpContext, "Failed to start sprint optimizer");
+        }
+    }
+
+    [HttpGet("agent/sprint-optimizer/active")]
+    [ProducesResponseType(typeof(SprintOptimizerJobDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<ActionResult<SprintOptimizerJobDto>> GetActiveSprintOptimizer()
+    {
+        try
+        {
+            var result = await _mediator.Send(new GetActiveSprintOptimizerJobQuery());
+            if (result.Payload is null)
+            {
+                return NoContent();
+            }
+
+            return Ok(result.Payload);
+        }
+        catch (ForbiddenAccessException)
+        {
+            return Forbid();
+        }
+    }
+
+    [HttpGet("agent/sprint-optimizer/{jobExternalId:guid}")]
+    [ProducesResponseType(typeof(SprintOptimizerJobDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<SprintOptimizerJobDto>> GetSprintOptimizer(Guid jobExternalId)
+    {
+        try
+        {
+            var result = await _mediator.Send(new GetSprintOptimizerJobQuery { JobExternalId = jobExternalId });
+            return Ok(result.Payload);
+        }
+        catch (NotFoundException)
+        {
+            return NotFound();
+        }
+        catch (ForbiddenAccessException)
+        {
+            return Forbid();
+        }
+    }
+
+    [HttpPost("agent/sprint-optimizer/{jobExternalId:guid}/cancel")]
+    [ProducesResponseType(typeof(SprintOptimizerJobDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<SprintOptimizerJobDto>> CancelSprintOptimizer(Guid jobExternalId)
+    {
+        try
+        {
+            var result = await _mediator.Send(new CancelSprintOptimizerJobCommand { JobExternalId = jobExternalId });
+            return Ok(result.Payload);
+        }
+        catch (NotFoundException)
+        {
+            return NotFound();
+        }
+        catch (ForbiddenAccessException)
+        {
+            return Forbid();
         }
     }
 

@@ -96,9 +96,10 @@ namespace Fistix.TaskManager.WebApi.Extensions
             {
               OnMessageReceived = context =>
               {
+                // SignalR WebSockets pass the JWT as ?access_token= (not Authorization header).
                 var accessToken = context.Request.Query["access_token"];
                 var path = context.HttpContext.Request.Path;
-                if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs/classification"))
+                if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs"))
                 {
                   context.Token = accessToken;
                 }

@@ -21,6 +21,7 @@ namespace Fistix.TaskManager.DataLayer
       services.AddScoped<IToolExecutionLogRepository, ToolExecutionLogRepository>();
       services.AddScoped<ISprintRepository, SprintRepository>();
       services.AddScoped<IAiBatchJobRepository, AiBatchJobRepository>();
+      services.AddScoped<ISprintOptimizerJobRepository, SprintOptimizerJobRepository>();
       services.AddScoped<IUserProfileRepository, UserProfileRepository>();
       services.AddScoped<IRepositoryFactory, RepositoryFactory>();
     }

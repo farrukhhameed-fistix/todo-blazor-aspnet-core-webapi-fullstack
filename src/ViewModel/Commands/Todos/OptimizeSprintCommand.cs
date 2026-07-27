@@ -1,9 +1,9 @@
 #nullable enable
 
-using Fistix.TaskManager.ViewModel.Dtos;
-using MediatR;
 using System;
 using System.Collections.Generic;
+using Fistix.TaskManager.ViewModel.Dtos;
+using MediatR;
 
 namespace Fistix.TaskManager.ViewModel.Commands.Todos;
 
@@ -14,9 +14,20 @@ public class OptimizeSprintCommand : IRequest<OptimizeSprintCommandResult>
     public string? Name { get; set; }
 }
 
+/// <summary>Starts an async sprint optimizer job; result is delivered via get/active + SignalR.</summary>
 public class OptimizeSprintCommandResult
 {
-    public OptimizeSprintResponseDto Payload { get; set; } = new();
+    public SprintOptimizerJobDto Payload { get; set; } = new();
+}
+
+public class CancelSprintOptimizerJobCommand : IRequest<CancelSprintOptimizerJobCommandResult>
+{
+    public Guid JobExternalId { get; set; }
+}
+
+public class CancelSprintOptimizerJobCommandResult
+{
+    public SprintOptimizerJobDto Payload { get; set; } = new();
 }
 
 public class OptimizeSprintResponseDto

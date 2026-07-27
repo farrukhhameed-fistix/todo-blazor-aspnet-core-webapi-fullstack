@@ -18,6 +18,7 @@ namespace Fistix.TaskManager.DataLayer
     public DbSet<Sprint> Sprints { get; set; }
     public DbSet<SprintTodo> SprintTodos { get; set; }
     public DbSet<AiBatchJob> AiBatchJobs { get; set; }
+    public DbSet<SprintOptimizerJob> SprintOptimizerJobs { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -34,6 +35,7 @@ namespace Fistix.TaskManager.DataLayer
       SprintModelConfig(modelBuilder);
       SprintTodoModelConfig(modelBuilder);
       AiBatchJobModelConfig(modelBuilder);
+      SprintOptimizerJobModelConfig(modelBuilder);
     }
 
     private void TodoTaskModelConfig(ModelBuilder modelBuilder)
@@ -78,6 +80,28 @@ namespace Fistix.TaskManager.DataLayer
         entityModel.Property(p => p.ImportTag).HasMaxLength(100);
         entityModel.Property(p => p.LastError).HasMaxLength(2000);
         entityModel.Property(p => p.TodoExternalIdsJson).IsRequired();
+      });
+    }
+
+    private void SprintOptimizerJobModelConfig(ModelBuilder modelBuilder)
+    {
+      modelBuilder.Entity<SprintOptimizerJob>(entityModel =>
+      {
+        entityModel.ToTable("SprintOptimizerJob");
+        entityModel.HasKey(k => k.Id);
+        entityModel.Property(p => p.Id).ValueGeneratedOnAdd();
+        entityModel.Property(p => p.ExternalId)
+          .HasDefaultValueSql("gen_random_uuid()")
+          .IsRequired();
+        entityModel.HasIndex(k => k.ExternalId).IsUnique();
+        entityModel.Property(p => p.CreatedByUserId).IsRequired();
+        entityModel.HasIndex(p => p.CreatedByUserId);
+        entityModel.HasIndex(p => p.Status);
+        entityModel.Property(p => p.Status).HasMaxLength(50).IsRequired();
+        entityModel.Property(p => p.CurrentPhase).HasMaxLength(50).IsRequired();
+        entityModel.Property(p => p.Name).HasMaxLength(200);
+        entityModel.Property(p => p.StatusMessage).HasMaxLength(500);
+        entityModel.Property(p => p.LastError).HasMaxLength(2000);
       });
     }
     private void UserProfileModelConfig(ModelBuilder modelBuilder)

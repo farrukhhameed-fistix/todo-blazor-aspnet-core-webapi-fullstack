@@ -4,6 +4,7 @@ using Fistix.TaskManager.AiLayer.Agents;
 using Fistix.TaskManager.AiLayer.Shared;
 using Fistix.TaskManager.Core.Abstractions.Repositories;
 using Fistix.TaskManager.Core.DomainModel.Aggregates;
+using Fistix.TaskManager.Core.DomainModel.Constants;
 using Fistix.TaskManager.ViewModel.Commands.Todos;
 using Fistix.TaskManager.ViewModel.Dtos;
 using Microsoft.Agents.AI;
@@ -85,7 +86,8 @@ public class SprintOptimizerAgent
         int maxTasks,
         int durationDays,
         string? name,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<string, string?, CancellationToken, Task>? onPhaseChanged = null)
     {
         var multi = IsMultiAgentMode();
         await _tools.ConfigureAsync(ownerId, maxTasks, durationDays, name, multi, cancellationToken);
@@ -96,8 +98,8 @@ public class SprintOptimizerAgent
             var goal = BuildGoal(maxTasks, durationDays, name);
 
             AgentResponse response = multi
-                ? await RunMultiAgentWorkflowAsync(chatClient, goal, maxTasks, durationDays, name, cancellationToken)
-                : await RunSingleAgentAsync(chatClient, goal, cancellationToken);
+                ? await RunMultiAgentWorkflowAsync(chatClient, goal, maxTasks, durationDays, name, cancellationToken, onPhaseChanged)
+                : await RunSingleAgentAsync(chatClient, goal, cancellationToken, onPhaseChanged);
 
             EnsureToolStepsPresent(response);
 
@@ -137,6 +139,11 @@ public class SprintOptimizerAgent
             _logger.LogWarning(ex, "MAF sprint agent failed; falling back to heuristic selection");
         }
 
+        if (onPhaseChanged is not null)
+        {
+            await onPhaseChanged(SprintOptimizerPhase.Persisting, "Using heuristic fallback selection.", cancellationToken);
+        }
+
         return await HeuristicFallbackAsync(ownerId, maxTasks, durationDays, cancellationToken);
     }
 
@@ -146,7 +153,8 @@ public class SprintOptimizerAgent
         int maxTasks,
         int durationDays,
         string? name,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<string, string?, CancellationToken, Task>? onPhaseChanged)
     {
         _logger.LogInformation("Running MAF Analyst → Planner sequential workflow");
 
@@ -168,6 +176,11 @@ public class SprintOptimizerAgent
             Summary = "Analyst → Planner"
         });
 
+        if (onPhaseChanged is not null)
+        {
+            await onPhaseChanged(SprintOptimizerPhase.Analyst, "Analyst is reviewing workload…", cancellationToken);
+        }
+
         _tools.SetActiveAgentRole("Analyst");
         var analystResponse = await analyst.RunAsync(goal, cancellationToken: cancellationToken);
         EnsureToolStepsPresent(analystResponse);
@@ -181,7 +194,14 @@ public class SprintOptimizerAgent
             _tools.Steps.Count,
             analystBrief.Length);
 
+        cancellationToken.ThrowIfCancellationRequested();
+
         var plannerGoal = BuildPlannerGoal(goal, analystBrief, maxTasks);
+
+        if (onPhaseChanged is not null)
+        {
+            await onPhaseChanged(SprintOptimizerPhase.Planner, "Planner is selecting tasks and creating sprint…", cancellationToken);
+        }
 
         _tools.SetActiveAgentRole("Planner");
         AIAgent planner = chatClient.AsAIAgent(
@@ -277,9 +297,15 @@ public class SprintOptimizerAgent
     private async Task<AgentResponse> RunSingleAgentAsync(
         IChatClient chatClient,
         string goal,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<string, string?, CancellationToken, Task>? onPhaseChanged)
     {
         _logger.LogInformation("Running MAF single sprint planning agent");
+
+        if (onPhaseChanged is not null)
+        {
+            await onPhaseChanged(SprintOptimizerPhase.Planner, "Sprint agent is planning…", cancellationToken);
+        }
 
         AIAgent agent = chatClient.AsAIAgent(
             instructions: SingleAgentInstructions,

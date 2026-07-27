@@ -2,8 +2,12 @@
 @attribute [Authorize]
 @using System.Text.Json
 @using Fistix.TaskManager.ViewModel.Commands.Todos
+@using Fistix.TaskManager.ViewModel.Dtos
+@using Fistix.TaskManager.WebApp.Services
 @using Fistix.TaskManager.WebApp.Services.DataServices
 @inject TodoDataService TodoDataService
+@inject SprintOptimizerHubService SprintOptimizerHubService
+@implements IAsyncDisposable
 
 <MudText Typo="Typo.h4" GutterBottom="true">AI Task Assistant</MudText>
 <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
@@ -104,9 +108,76 @@
       </MudItem>
     </MudGrid>
 
-    <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_loading" OnClick="OptimizeSprintAsync">
-      Optimize Sprint
-    </MudButton>
+    <MudStack Row="true" Spacing="2" Class="mb-3">
+      <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                 Disabled="_loading || IsSprintJobRunning"
+                 OnClick="OptimizeSprintAsync">
+        Optimize Sprint
+      </MudButton>
+      @if (IsSprintJobRunning && _sprintJob is not null)
+      {
+        <MudButton Variant="Variant.Outlined" Color="Color.Error" Disabled="_loading"
+                   OnClick="CancelSprintOptimizerAsync">
+          Cancel
+        </MudButton>
+      }
+    </MudStack>
+
+    @if (!string.IsNullOrWhiteSpace(_hubStatusMessage))
+    {
+      <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3" Style="max-width: 40rem;">
+        @_hubStatusMessage
+      </MudAlert>
+    }
+
+    @if (_sprintJob is not null && (_sprintJob.Status is "Pending" or "Running" or "Stuck"))
+    {
+      <MudPaper Class="pa-4 mb-3" Elevation="1" Style="max-width: 40rem;">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+          <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+          <MudText Typo="Typo.subtitle2">@_sprintJob.CurrentPhase</MudText>
+          <MudChip T="string" Size="Size.Small" Color="Color.Info">@_sprintJob.Status</MudChip>
+        </MudStack>
+        <MudText Typo="Typo.body2" Color="Color.Secondary">
+          @(_sprintJob.StatusMessage ?? "Working…")
+        </MudText>
+        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1">
+          Job <code>@_sprintJob.ExternalId</code>
+        </MudText>
+
+        @if (LiveSprintSteps.Count > 0)
+        {
+          <MudDivider Class="my-3" />
+          <MudText Typo="Typo.subtitle2" Class="mb-2">Live agent steps</MudText>
+          <MudTimeline TimelinePosition="TimelinePosition.Start">
+            @foreach (var step in LiveSprintSteps)
+            {
+              <MudTimelineItem Color="Color.Primary" Size="Size.Small">
+                <MudText Typo="Typo.body2">
+                  <strong>@step.AgentName</strong> / <code>@step.ToolName</code>
+                </MudText>
+                @if (!string.IsNullOrWhiteSpace(step.Summary))
+                {
+                  <MudText Typo="Typo.caption" Color="Color.Secondary">@step.Summary</MudText>
+                }
+              </MudTimelineItem>
+            }
+          </MudTimeline>
+        }
+      </MudPaper>
+    }
+    else if (_sprintJob is not null && _sprintJob.Status == "Failed")
+    {
+      <MudAlert Severity="Severity.Error" Class="mb-3" Style="max-width: 40rem;">
+        @(_sprintJob.LastError ?? "Sprint optimizer failed.")
+      </MudAlert>
+    }
+    else if (_sprintJob is not null && _sprintJob.Status == "Cancelled")
+    {
+      <MudAlert Severity="Severity.Warning" Class="mb-3" Style="max-width: 40rem;">
+        Sprint optimizer cancelled.
+      </MudAlert>
+    }
 
     @if (_sprintResult is not null)
     {
@@ -220,10 +291,206 @@
   private string _sprintName = string.Empty;
   private bool _loading;
   private string? _error;
+  private string? _hubStatusMessage;
   private AiQueryResponseDto? _response;
   private ProposeAiToolsResponseDto? _proposal;
   private ExecuteAiToolsResponseDto? _execution;
+  private SprintOptimizerJobDto? _sprintJob;
   private OptimizeSprintResponseDto? _sprintResult;
+  private CancellationTokenSource? _pollCts;
+
+  private bool IsSprintJobRunning =>
+    _sprintJob is not null
+    && (_sprintJob.Status is "Pending" or "Running" or "Stuck");
+
+  private IReadOnlyList<AgentStepDto> LiveSprintSteps =>
+    _sprintJob?.Result?.Steps ?? [];
+
+  protected override async Task OnInitializedAsync()
+  {
+    SprintOptimizerHubService.JobUpdated += OnSprintJobUpdated;
+    SprintOptimizerHubService.ConnectionLost += OnHubConnectionLost;
+    SprintOptimizerHubService.ReconnectedAsync += OnHubReconnectedAsync;
+
+    var active = await TodoDataService.GetActiveSprintOptimizer();
+    if (active.IsSucceed && active.Payload is not null)
+    {
+      await TrackSprintJobAsync(active.Payload);
+    }
+  }
+
+  private void OnSprintJobUpdated(SprintOptimizerJobDto dto)
+  {
+    _ = InvokeAsync(() =>
+    {
+      ApplySprintJob(dto);
+      StateHasChanged();
+    });
+  }
+
+  private void OnHubConnectionLost()
+  {
+    _ = InvokeAsync(() =>
+    {
+      if (!IsSprintJobRunning || _sprintJob is null)
+      {
+        return;
+      }
+
+      _hubStatusMessage = "Live updates interrupted — refreshing status…";
+      StartFallbackPolling(_sprintJob.ExternalId);
+      StateHasChanged();
+    });
+  }
+
+  private async Task OnHubReconnectedAsync(Guid jobExternalId)
+  {
+    await InvokeAsync(async () =>
+    {
+      StopFallbackPolling();
+      _hubStatusMessage = "Reconnected — syncing job status…";
+      StateHasChanged();
+      await RefreshSprintJobAsync(jobExternalId);
+      _hubStatusMessage = IsSprintJobRunning ? null : _hubStatusMessage;
+      if (!IsSprintJobRunning)
+      {
+        _hubStatusMessage = null;
+      }
+
+      StateHasChanged();
+    });
+  }
+
+  private async Task TrackSprintJobAsync(SprintOptimizerJobDto job)
+  {
+    ApplySprintJob(job);
+    await SprintOptimizerHubService.SubscribeToJobAsync(job.ExternalId);
+    await RefreshSprintJobAsync(job.ExternalId);
+
+    // SignalR is primary. Poll only if hub never connected (or dropped).
+    if (IsSprintJobRunning && !SprintOptimizerHubService.IsConnected)
+    {
+      _hubStatusMessage = "Live updates unavailable — refreshing status…";
+      StartFallbackPolling(job.ExternalId);
+    }
+  }
+
+  private void ApplySprintJob(SprintOptimizerJobDto dto)
+  {
+    _sprintJob = dto;
+    if (dto.Status == "Completed")
+    {
+      _hubStatusMessage = null;
+      StopFallbackPolling();
+      if (dto.Result is not null)
+      {
+        _sprintResult = dto.Result;
+        _error = null;
+      }
+    }
+    else if (dto.Status is "Failed" or "Cancelled")
+    {
+      _hubStatusMessage = null;
+      StopFallbackPolling();
+      if (dto.Status == "Failed")
+      {
+        _error = dto.LastError ?? "Sprint optimizer failed.";
+      }
+    }
+  }
+
+  private void StartFallbackPolling(Guid jobExternalId)
+  {
+    if (_pollCts is not null)
+    {
+      return; // already polling
+    }
+
+    if (!IsSprintJobRunning)
+    {
+      return;
+    }
+
+    _pollCts = new CancellationTokenSource();
+    var token = _pollCts.Token;
+    _ = PollSprintJobLoopAsync(jobExternalId, token);
+  }
+
+  private void StopFallbackPolling()
+  {
+    try
+    {
+      _pollCts?.Cancel();
+    }
+    catch
+    {
+      // ignore
+    }
+
+    _pollCts?.Dispose();
+    _pollCts = null;
+  }
+
+  private async Task PollSprintJobLoopAsync(Guid jobExternalId, CancellationToken cancellationToken)
+  {
+    try
+    {
+      // Immediate refresh, then every 5s only while disconnected.
+      await RefreshSprintJobAsync(jobExternalId);
+      await InvokeAsync(StateHasChanged);
+
+      while (!cancellationToken.IsCancellationRequested && IsSprintJobRunning)
+      {
+        if (SprintOptimizerHubService.IsConnected)
+        {
+          break;
+        }
+
+        await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+        await RefreshSprintJobAsync(jobExternalId);
+        await InvokeAsync(StateHasChanged);
+      }
+    }
+    catch (OperationCanceledException)
+    {
+      // expected on stop/dispose
+    }
+    finally
+    {
+      // Clear CTS if this loop exited on its own (hub recovered or job finished).
+      if (_pollCts is not null && !_pollCts.IsCancellationRequested)
+      {
+        _pollCts.Dispose();
+        _pollCts = null;
+      }
+
+      await InvokeAsync(() =>
+      {
+        if (SprintOptimizerHubService.IsConnected && IsSprintJobRunning)
+        {
+          _hubStatusMessage = null;
+        }
+
+        StateHasChanged();
+      });
+    }
+  }
+
+  private async Task RefreshSprintJobAsync(Guid jobExternalId)
+  {
+    var refreshed = await TodoDataService.GetSprintOptimizer(jobExternalId);
+    if (!refreshed.IsSucceed || refreshed.Payload is null)
+    {
+      return;
+    }
+
+    ApplySprintJob(refreshed.Payload);
+
+    if (refreshed.Payload.Status == "Completed" && refreshed.Payload.Result is null)
+    {
+      _error = "Sprint completed but result payload was empty. Open Sprints to view the created sprint.";
+    }
+  }
 
   private async Task AskAsync()
   {
@@ -231,7 +498,6 @@
     _response = null;
     _proposal = null;
     _execution = null;
-    _sprintResult = null;
     if (string.IsNullOrWhiteSpace(_question))
     {
       _error = "Enter a question.";
@@ -262,7 +528,6 @@
     _response = null;
     _proposal = null;
     _execution = null;
-    _sprintResult = null;
     if (string.IsNullOrWhiteSpace(_toolPrompt))
     {
       _error = "Enter a prompt.";
@@ -317,6 +582,7 @@
   private async Task OptimizeSprintAsync()
   {
     _error = null;
+    _hubStatusMessage = null;
     _response = null;
     _proposal = null;
     _execution = null;
@@ -330,11 +596,36 @@
         string.IsNullOrWhiteSpace(_sprintName) ? null : _sprintName.Trim());
       if (!result.IsSucceed || result.Payload is null)
       {
-        _error = result.Message ?? "Sprint optimization failed.";
+        _error = result.Message ?? "Failed to start sprint optimizer.";
         return;
       }
 
-      _sprintResult = result.Payload;
+      await TrackSprintJobAsync(result.Payload);
+    }
+    finally
+    {
+      _loading = false;
+    }
+  }
+
+  private async Task CancelSprintOptimizerAsync()
+  {
+    if (_sprintJob is null)
+    {
+      return;
+    }
+
+    _loading = true;
+    try
+    {
+      var result = await TodoDataService.CancelSprintOptimizer(_sprintJob.ExternalId);
+      if (!result.IsSucceed || result.Payload is null)
+      {
+        _error = result.Message ?? "Failed to cancel sprint optimizer.";
+        return;
+      }
+
+      ApplySprintJob(result.Payload);
     }
     finally
     {
@@ -350,4 +641,23 @@
 
   private static string FormatArgs(Dictionary<string, JsonElement> args) =>
     JsonSerializer.Serialize(args, new JsonSerializerOptions { WriteIndented = true });
+
+  public async ValueTask DisposeAsync()
+  {
+    StopFallbackPolling();
+    SprintOptimizerHubService.JobUpdated -= OnSprintJobUpdated;
+    SprintOptimizerHubService.ConnectionLost -= OnHubConnectionLost;
+    SprintOptimizerHubService.ReconnectedAsync -= OnHubReconnectedAsync;
+    if (_sprintJob is not null)
+    {
+      try
+      {
+        await SprintOptimizerHubService.LeaveJobAsync(_sprintJob.ExternalId);
+      }
+      catch
+      {
+        // best effort
+      }
+    }
+  }
 }

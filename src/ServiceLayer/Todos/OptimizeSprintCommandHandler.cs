@@ -1,41 +1,44 @@
 #nullable enable
 
-using Fistix.TaskManager.AiLayer.Shared;
-using Fistix.TaskManager.Core.Abstractions.Repositories;
-using Fistix.TaskManager.Core.Abstractions.Services;
-using Fistix.TaskManager.Core.DomainModel.Aggregates;
-using Fistix.TaskManager.Core.Exceptions;
-using Fistix.TaskManager.Core.SecurityModel;
-using Fistix.TaskManager.ViewModel.Commands.Todos;
-using Fistix.TaskManager.ViewModel.Dtos;
-using MediatR;
-using Microsoft.Extensions.Logging;
 using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Fistix.TaskManager.AiLayer.Shared;
+using Fistix.TaskManager.Core.Abstractions.Repositories;
+using Fistix.TaskManager.Core.Abstractions.Services;
+using Fistix.TaskManager.Core.DomainModel.Aggregates;
+using Fistix.TaskManager.Core.DomainModel.Constants;
+using Fistix.TaskManager.Core.Exceptions;
+using Fistix.TaskManager.Core.SecurityModel;
+using Fistix.TaskManager.ServiceLayer.Notifications;
+using Fistix.TaskManager.ViewModel.Commands.Todos;
+using Fistix.TaskManager.ViewModel.Dtos;
+using Fistix.TaskManager.ViewModel.Queries.Todos;
+using MediatR;
+using Microsoft.Extensions.Logging;
 
 namespace Fistix.TaskManager.ServiceLayer.Todos;
 
-public class OptimizeSprintCommandHandler : IRequestHandler<OptimizeSprintCommand, OptimizeSprintCommandResult>
+public sealed class OptimizeSprintCommandHandler : IRequestHandler<OptimizeSprintCommand, OptimizeSprintCommandResult>
 {
-    private readonly ISprintRepository _sprintRepository;
+    private readonly ISprintOptimizerJobRepository _jobRepository;
     private readonly ICurrentUserService _currentUserService;
-    private readonly SprintOptimizerAgent _agent;
     private readonly AiConfiguration _aiConfig;
+    private readonly ISprintOptimizerNotifier _notifier;
     private readonly ILogger<OptimizeSprintCommandHandler> _logger;
 
     public OptimizeSprintCommandHandler(
-        ISprintRepository sprintRepository,
+        ISprintOptimizerJobRepository jobRepository,
         ICurrentUserService currentUserService,
-        SprintOptimizerAgent agent,
         AiConfiguration aiConfig,
+        ISprintOptimizerNotifier notifier,
         ILogger<OptimizeSprintCommandHandler> logger)
     {
-        _sprintRepository = sprintRepository;
+        _jobRepository = jobRepository;
         _currentUserService = currentUserService;
-        _agent = agent;
         _aiConfig = aiConfig;
+        _notifier = notifier;
         _logger = logger;
     }
 
@@ -49,78 +52,139 @@ public class OptimizeSprintCommandHandler : IRequestHandler<OptimizeSprintComman
         }
 
         var userId = TodoAccessGuard.RequireCurrentUserId(_currentUserService);
+        var active = await _jobRepository.GetActiveByOwnerAsync(userId, cancellationToken);
+        if (active is not null)
+        {
+            throw new InvalidOperationException(
+                $"An active sprint optimizer job already exists ({active.ExternalId}, status {active.Status}). Cancel it before starting a new one.");
+        }
 
-        _logger.LogInformation("Running MAF sprint planning agent for user {UserId}", userId);
+        var job = new SprintOptimizerJob
+        {
+            CreatedByUserId = userId,
+            MaxTasks = Math.Clamp(command.MaxTasks, 1, 50),
+            DurationDays = Math.Clamp(command.DurationDays, 1, 90),
+            Name = string.IsNullOrWhiteSpace(command.Name) ? null : command.Name.Trim(),
+            Status = AiBatchJobStatus.Pending,
+            CurrentPhase = SprintOptimizerPhase.Queued,
+            StatusMessage = "Queued for sprint planning.",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+            HeartbeatAt = DateTime.UtcNow
+        };
+        job.GenerateNewExternalId();
 
-        var plan = await _agent.PlanAsync(
+        await _jobRepository.CreateAsync(job, cancellationToken);
+        _logger.LogInformation(
+            "Queued sprint optimizer job {JobId} for user {UserId} (maxTasks={MaxTasks})",
+            job.ExternalId,
             userId,
-            command.MaxTasks,
-            command.DurationDays,
-            command.Name,
-            cancellationToken);
+            job.MaxTasks);
 
-        Guid sprintId;
-        string sprintName;
-        DateTime startDate;
-        DateTime endDate;
+        var dto = SprintOptimizerJobMapper.ToDto(job);
+        await _notifier.NotifyAsync(dto, cancellationToken);
+        return new OptimizeSprintCommandResult { Payload = dto };
+    }
+}
 
-        if (plan.CreatedSprintId.HasValue
-            && plan.CreatedStartDate.HasValue
-            && plan.CreatedEndDate.HasValue)
+public sealed class CancelSprintOptimizerJobCommandHandler
+    : IRequestHandler<CancelSprintOptimizerJobCommand, CancelSprintOptimizerJobCommandResult>
+{
+    private readonly ISprintOptimizerJobRepository _jobRepository;
+    private readonly ICurrentUserService _currentUserService;
+    private readonly ISprintOptimizerNotifier _notifier;
+
+    public CancelSprintOptimizerJobCommandHandler(
+        ISprintOptimizerJobRepository jobRepository,
+        ICurrentUserService currentUserService,
+        ISprintOptimizerNotifier notifier)
+    {
+        _jobRepository = jobRepository;
+        _currentUserService = currentUserService;
+        _notifier = notifier;
+    }
+
+    public async Task<CancelSprintOptimizerJobCommandResult> Handle(
+        CancelSprintOptimizerJobCommand command,
+        CancellationToken cancellationToken)
+    {
+        var ownerId = TodoAccessGuard.RequireCurrentUserId(_currentUserService);
+        var job = await _jobRepository.GetByExternalIdAsync(command.JobExternalId, cancellationToken)
+                  ?? throw new NotFoundException();
+        if (job.CreatedByUserId != ownerId && !_currentUserService.HasAdminProfile)
         {
-            sprintId = plan.CreatedSprintId.Value;
-            sprintName = plan.CreatedSprintName ?? $"Optimized Sprint {plan.CreatedStartDate:yyyy-MM-dd}";
-            startDate = plan.CreatedStartDate.Value;
-            endDate = plan.CreatedEndDate.Value;
-        }
-        else
-        {
-            startDate = DateTime.UtcNow.Date;
-            endDate = startDate.AddDays(command.DurationDays);
-            sprintName = string.IsNullOrWhiteSpace(command.Name)
-                ? $"Optimized Sprint {startDate:yyyy-MM-dd}"
-                : command.Name.Trim();
-
-            var sprint = new Sprint
-            {
-                Name = sprintName,
-                StartDate = startDate,
-                EndDate = endDate,
-                CreatedByUserId = userId,
-                CreatedAt = DateTime.UtcNow,
-                Reasoning = plan.Reasoning
-            };
-            sprint.GenerateNewExternalId();
-
-            foreach (var todo in plan.SelectedTodos)
-            {
-                sprint.SprintTodos.Add(new SprintTodo { TodoId = todo.Id });
-            }
-
-            await _sprintRepository.Create(sprint, cancellationToken);
-            sprintId = sprint.ExternalId;
+            throw new ForbiddenAccessException();
         }
 
-        return new OptimizeSprintCommandResult
+        if (job.Status is AiBatchJobStatus.Completed or AiBatchJobStatus.Cancelled)
         {
-            Payload = new OptimizeSprintResponseDto
-            {
-                SprintId = sprintId,
-                Name = sprintName,
-                StartDate = startDate,
-                EndDate = endDate,
-                Reasoning = plan.Reasoning,
-                Steps = plan.Steps,
-                SelectedTasks = plan.SelectedTodos.Select(t => new SprintTaskSummaryDto
-                {
-                    ExternalId = t.ExternalId,
-                    Title = t.Title,
-                    Priority = t.Priority,
-                    Status = t.Status,
-                    DueDate = t.DueDate,
-                    Category = t.Category
-                }).ToList()
-            }
+            return new CancelSprintOptimizerJobCommandResult { Payload = SprintOptimizerJobMapper.ToDto(job) };
+        }
+
+        job.CancelRequested = true;
+        job.Status = AiBatchJobStatus.Cancelled;
+        job.StatusMessage = "Cancelled by user.";
+        job.CompletedAt = DateTime.UtcNow;
+        await _jobRepository.UpdateAsync(job, cancellationToken);
+        var dto = SprintOptimizerJobMapper.ToDto(job);
+        await _notifier.NotifyAsync(dto, cancellationToken);
+        return new CancelSprintOptimizerJobCommandResult { Payload = dto };
+    }
+}
+
+public sealed class GetSprintOptimizerJobQueryHandler
+    : IRequestHandler<GetSprintOptimizerJobQuery, GetSprintOptimizerJobQueryResult>
+{
+    private readonly ISprintOptimizerJobRepository _jobRepository;
+    private readonly ICurrentUserService _currentUserService;
+
+    public GetSprintOptimizerJobQueryHandler(
+        ISprintOptimizerJobRepository jobRepository,
+        ICurrentUserService currentUserService)
+    {
+        _jobRepository = jobRepository;
+        _currentUserService = currentUserService;
+    }
+
+    public async Task<GetSprintOptimizerJobQueryResult> Handle(
+        GetSprintOptimizerJobQuery query,
+        CancellationToken cancellationToken)
+    {
+        var ownerId = TodoAccessGuard.RequireCurrentUserId(_currentUserService);
+        var job = await _jobRepository.GetByExternalIdAsync(query.JobExternalId, cancellationToken)
+                  ?? throw new NotFoundException();
+        if (job.CreatedByUserId != ownerId && !_currentUserService.HasAdminProfile)
+        {
+            throw new ForbiddenAccessException();
+        }
+
+        return new GetSprintOptimizerJobQueryResult { Payload = SprintOptimizerJobMapper.ToDto(job) };
+    }
+}
+
+public sealed class GetActiveSprintOptimizerJobQueryHandler
+    : IRequestHandler<GetActiveSprintOptimizerJobQuery, GetActiveSprintOptimizerJobQueryResult>
+{
+    private readonly ISprintOptimizerJobRepository _jobRepository;
+    private readonly ICurrentUserService _currentUserService;
+
+    public GetActiveSprintOptimizerJobQueryHandler(
+        ISprintOptimizerJobRepository jobRepository,
+        ICurrentUserService currentUserService)
+    {
+        _jobRepository = jobRepository;
+        _currentUserService = currentUserService;
+    }
+
+    public async Task<GetActiveSprintOptimizerJobQueryResult> Handle(
+        GetActiveSprintOptimizerJobQuery query,
+        CancellationToken cancellationToken)
+    {
+        var ownerId = TodoAccessGuard.RequireCurrentUserId(_currentUserService);
+        var job = await _jobRepository.GetActiveByOwnerAsync(ownerId, cancellationToken);
+        return new GetActiveSprintOptimizerJobQueryResult
+        {
+            Payload = job is null ? null : SprintOptimizerJobMapper.ToDto(job)
         };
     }
 }

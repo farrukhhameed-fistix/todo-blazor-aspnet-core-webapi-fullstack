@@ -73,7 +73,11 @@
       </MudStack>
       @if (Classification?.Status == "Failed")
       {
-        <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="RetryClassification">Retry</MudButton>
+        <MudButton Size="Size.Small" Variant="Variant.Outlined" OnClick="GenerateClassification">Retry</MudButton>
+      }
+      else if (Classification?.Status == "Completed" && !string.IsNullOrWhiteSpace(Classification.SuggestedPriority))
+      {
+        <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="GenerateClassification">Regenerate</MudButton>
       }
     </MudStack>
 
@@ -86,7 +90,10 @@
     }
     else if (!string.IsNullOrEmpty(ClassificationError))
     {
-      <MudAlert Severity="Severity.Warning" Dense="true">@ClassificationError</MudAlert>
+      <MudAlert Severity="Severity.Warning" Dense="true">
+        @ClassificationError
+        <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="GenerateClassification" Class="ml-2">Try again</MudButton>
+      </MudAlert>
     }
     else if (Classification?.Status == "Completed" && !string.IsNullOrWhiteSpace(Classification.SuggestedPriority))
     {
@@ -122,7 +129,10 @@
     }
     else
     {
-      <MudText Typo="Typo.body2" Color="Color.Secondary">No AI priority suggestion yet.</MudText>
+      <MudText Typo="Typo.body2" Color="Color.Secondary">
+        No AI priority suggestion yet.
+        <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="GenerateClassification">Generate</MudButton>
+      </MudText>
     }
   </MudPaper>
 
@@ -274,7 +284,7 @@
     private static bool IsPendingClassification(TaskClassificationDto? dto) =>
         string.Equals(dto?.Status, "Pending", StringComparison.OrdinalIgnoreCase);
 
-    private async System.Threading.Tasks.Task RetryClassification()
+    private async System.Threading.Tasks.Task GenerateClassification()
     {
         IsClassifying = true;
         ClassificationError = null;
@@ -289,12 +299,12 @@
             }
             else
             {
-                ClassificationError = result.Message ?? "Failed to retry classification";
+                ClassificationError = result.Message ?? "Failed to generate priority suggestion";
             }
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Error retrying classification");
+            Logger.LogError(ex, "Error generating classification");
             ClassificationError = "Network error or API unavailable";
         }
         finally

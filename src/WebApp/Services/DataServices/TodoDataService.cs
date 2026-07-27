@@ -241,12 +241,12 @@ namespace Fistix.TaskManager.WebApp.Services.DataServices
       return result;
     }
 
-    public async Task<ApiCallResult<OptimizeSprintResponseDto>> OptimizeSprint(
+    public async Task<ApiCallResult<SprintOptimizerJobDto>> OptimizeSprint(
       int maxTasks = 12,
       int durationDays = 14,
       string? name = null)
     {
-      var result = new ApiCallResult<OptimizeSprintResponseDto>();
+      var result = new ApiCallResult<SprintOptimizerJobDto>();
       var command = new OptimizeSprintCommand
       {
         MaxTasks = maxTasks,
@@ -257,7 +257,68 @@ namespace Fistix.TaskManager.WebApp.Services.DataServices
       var response = await _httpClient.PostAsJsonAsync("api/ai/agent/sprint-optimizer", command);
       if (response.IsSuccessStatusCode)
       {
-        result.Payload = await response.Content.ReadFromJsonAsync<OptimizeSprintResponseDto>();
+        result.Payload = await response.Content.ReadFromJsonAsync<SprintOptimizerJobDto>();
+        result.IsSucceed = true;
+      }
+      else
+      {
+        result.IsSucceed = false;
+        result.Message = await response.GetErrorMessage();
+      }
+
+      return result;
+    }
+
+    public async Task<ApiCallResult<SprintOptimizerJobDto?>> GetActiveSprintOptimizer()
+    {
+      var result = new ApiCallResult<SprintOptimizerJobDto?>();
+      var response = await _httpClient.GetAsync("api/ai/agent/sprint-optimizer/active");
+      if (response.StatusCode == System.Net.HttpStatusCode.NoContent)
+      {
+        result.IsSucceed = true;
+        result.Payload = null;
+        return result;
+      }
+
+      if (response.IsSuccessStatusCode)
+      {
+        result.Payload = await response.Content.ReadFromJsonAsync<SprintOptimizerJobDto>();
+        result.IsSucceed = true;
+      }
+      else
+      {
+        result.IsSucceed = false;
+        result.Message = await response.GetErrorMessage();
+      }
+
+      return result;
+    }
+
+    public async Task<ApiCallResult<SprintOptimizerJobDto>> GetSprintOptimizer(Guid jobExternalId)
+    {
+      var result = new ApiCallResult<SprintOptimizerJobDto>();
+      var response = await _httpClient.GetAsync($"api/ai/agent/sprint-optimizer/{jobExternalId}");
+      if (response.IsSuccessStatusCode)
+      {
+        result.Payload = await response.Content.ReadFromJsonAsync<SprintOptimizerJobDto>();
+        result.IsSucceed = true;
+      }
+      else
+      {
+        result.IsSucceed = false;
+        result.Message = await response.GetErrorMessage();
+      }
+
+      return result;
+    }
+
+    public async Task<ApiCallResult<SprintOptimizerJobDto>> CancelSprintOptimizer(Guid jobExternalId)
+    {
+      var result = new ApiCallResult<SprintOptimizerJobDto>();
+      var response = await _httpClient.PostAsync($"api/ai/agent/sprint-optimizer/{jobExternalId}/cancel", null);
+      if (response.IsSuccessStatusCode)
+      {
+        result.Payload = await response.Content.ReadFromJsonAsync<SprintOptimizerJobDto>();
         result.IsSucceed = true;
       }
       else

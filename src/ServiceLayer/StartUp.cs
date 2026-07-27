@@ -37,6 +37,8 @@ namespace Fistix.TaskManager.ServiceLayer
       services.AddHostedService<AiBatchBackgroundService>();
       // SignalR notifier is registered by WebApi; tests register NullAiBatchNotifier.
       services.TryAddSingleton<IAiBatchNotifier, NullAiBatchNotifier>();
+      services.TryAddSingleton<ISprintOptimizerNotifier, NullSprintOptimizerNotifier>();
+      services.AddHostedService<SprintOptimizerBackgroundService>();
             
       services.AddDataLayer(masterConfig);
     }

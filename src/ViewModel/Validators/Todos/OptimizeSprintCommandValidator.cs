@@ -14,3 +14,11 @@ public class OptimizeSprintCommandValidator : AbstractValidator<OptimizeSprintCo
         RuleFor(x => x.Name).MaximumLength(200).When(x => !string.IsNullOrWhiteSpace(x.Name));
     }
 }
+
+public class CancelSprintOptimizerJobCommandValidator : AbstractValidator<CancelSprintOptimizerJobCommand>
+{
+    public CancelSprintOptimizerJobCommandValidator()
+    {
+        RuleFor(x => x.JobExternalId).NotEmpty();
+    }
+}

@@ -12,15 +12,17 @@ using Microsoft.AspNetCore.SignalR;
 namespace Fistix.TaskManager.WebApi.Hubs;
 
 [Authorize]
-public class AiBatchHub : Hub
+public class SprintOptimizerHub : Hub
 {
-    public const string HubPath = "/hubs/ai-batch";
-    public const string BatchUpdatedMethod = "BatchJobUpdated";
+    public const string HubPath = "/hubs/sprint-optimizer";
+    public const string JobUpdatedMethod = "SprintOptimizerUpdated";
 
-    private readonly IAiBatchJobRepository _jobRepository;
+    private readonly ISprintOptimizerJobRepository _jobRepository;
     private readonly ICurrentUserService _currentUserService;
 
-    public AiBatchHub(IAiBatchJobRepository jobRepository, ICurrentUserService currentUserService)
+    public SprintOptimizerHub(
+        ISprintOptimizerJobRepository jobRepository,
+        ICurrentUserService currentUserService)
     {
         _jobRepository = jobRepository;
         _currentUserService = currentUserService;
@@ -31,7 +33,7 @@ public class AiBatchHub : Hub
         try
         {
             var job = await _jobRepository.GetByExternalIdAsync(jobExternalId, Context.ConnectionAborted)
-                      ?? throw new HubException("Batch job not found.");
+                      ?? throw new HubException("Sprint optimizer job not found.");
 
             var userId = TodoAccessGuard.RequireCurrentUserId(_currentUserService);
             if (job.CreatedByUserId != userId && !_currentUserService.HasAdminProfile)
@@ -50,5 +52,5 @@ public class AiBatchHub : Hub
     public Task LeaveJob(Guid jobExternalId) =>
         Groups.RemoveFromGroupAsync(Context.ConnectionId, GetGroupName(jobExternalId));
 
-    public static string GetGroupName(Guid jobExternalId) => $"ai-batch:{jobExternalId}";
+    public static string GetGroupName(Guid jobExternalId) => $"sprint-optimizer:{jobExternalId}";
 }

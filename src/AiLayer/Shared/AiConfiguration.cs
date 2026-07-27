@@ -31,6 +31,9 @@ public class AgentsSettings
     /// <c>Single</c> = one agent with all tools.
     /// </summary>
     public string WorkflowMode { get; set; } = "Multi";
+
+    /// <summary>Mark running sprint optimizer jobs stuck after this many seconds without heartbeat.</summary>
+    public int StuckAfterSeconds { get; set; } = 300;
 }
 
 public class EmbeddingSettings

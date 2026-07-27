@@ -11,6 +11,7 @@ public static class SignalRServiceExtension
         services.AddSignalR();
         services.AddSingleton<IClassificationNotifier, SignalRClassificationNotifier>();
         services.AddSingleton<IAiBatchNotifier, SignalRAiBatchNotifier>();
+        services.AddSingleton<ISprintOptimizerNotifier, SignalRSprintOptimizerNotifier>();
         return services;
     }
 }
