@@ -3,10 +3,12 @@ using Fistix.TaskManager.Core.AutoMapperProfiles;
 using Fistix.TaskManager.Core.Config;
 using Fistix.TaskManager.DataLayer;
 using Fistix.TaskManager.ServiceLayer.Background;
+using Fistix.TaskManager.ServiceLayer.Notifications;
 using Fistix.TaskManager.ServiceLayer.Todos;
 using Fistix.TaskManager.ViewModel.Commands.Todos;
 using MediatR;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Fistix.TaskManager.ServiceLayer
 {
@@ -30,6 +32,11 @@ namespace Fistix.TaskManager.ServiceLayer
       services.AddScoped<IEmbeddingProcessor, EmbeddingProcessor>();
       services.AddScoped<IVectorStore, PgVectorEmbeddingStore>();
       services.AddHostedService<EmbeddingBackgroundService>();
+
+      services.AddScoped<IAiBatchStepExecutor, AiBatchStepExecutor>();
+      services.AddHostedService<AiBatchBackgroundService>();
+      // SignalR notifier is registered by WebApi; tests register NullAiBatchNotifier.
+      services.TryAddSingleton<IAiBatchNotifier, NullAiBatchNotifier>();
             
       services.AddDataLayer(masterConfig);
     }

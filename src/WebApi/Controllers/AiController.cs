@@ -428,4 +428,145 @@ public class AiController : ControllerBase
             return ApiErrorResponses.UnexpectedError(HttpContext, "Failed to optimize sprint");
         }
     }
+
+    /// <summary>
+    /// Starts a durable AI batch job (embedding → classify → summarize) with pause/continue/cancel.
+    /// </summary>
+    [HttpPost("batch")]
+    [ProducesResponseType(typeof(AiBatchJobDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<AiBatchJobDto>> StartBatch([FromBody] StartAiBatchJobCommand command)
+    {
+        if (!ModelState.IsValid)
+        {
+            return BadRequest(ModelState);
+        }
+
+        try
+        {
+            var result = await _mediator.Send(command);
+            return Ok(result.Payload);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new ProblemDetails { Title = "Cannot start batch job", Detail = ex.Message });
+        }
+        catch (ForbiddenAccessException)
+        {
+            return Forbid();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error starting AI batch job");
+            return ApiErrorResponses.UnexpectedError(HttpContext, "Failed to start AI batch job");
+        }
+    }
+
+    [HttpGet("batch/active")]
+    [ProducesResponseType(typeof(AiBatchJobDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<ActionResult<AiBatchJobDto>> GetActiveBatch()
+    {
+        try
+        {
+            var result = await _mediator.Send(new GetActiveAiBatchJobQuery());
+            if (result.Payload is null)
+            {
+                return NoContent();
+            }
+
+            return Ok(result.Payload);
+        }
+        catch (ForbiddenAccessException)
+        {
+            return Forbid();
+        }
+    }
+
+    [HttpGet("batch/{jobExternalId:guid}")]
+    [ProducesResponseType(typeof(AiBatchJobDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<AiBatchJobDto>> GetBatch(Guid jobExternalId)
+    {
+        try
+        {
+            var result = await _mediator.Send(new GetAiBatchJobQuery { JobExternalId = jobExternalId });
+            return Ok(result.Payload);
+        }
+        catch (NotFoundException)
+        {
+            return NotFound();
+        }
+        catch (ForbiddenAccessException)
+        {
+            return Forbid();
+        }
+    }
+
+    [HttpPost("batch/{jobExternalId:guid}/pause")]
+    [ProducesResponseType(typeof(AiBatchJobDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<AiBatchJobDto>> PauseBatch(Guid jobExternalId)
+    {
+        try
+        {
+            var result = await _mediator.Send(new PauseAiBatchJobCommand { JobExternalId = jobExternalId });
+            return Ok(result.Payload);
+        }
+        catch (NotFoundException)
+        {
+            return NotFound();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+        catch (ForbiddenAccessException)
+        {
+            return Forbid();
+        }
+    }
+
+    [HttpPost("batch/{jobExternalId:guid}/continue")]
+    [ProducesResponseType(typeof(AiBatchJobDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<AiBatchJobDto>> ContinueBatch(Guid jobExternalId)
+    {
+        try
+        {
+            var result = await _mediator.Send(new ContinueAiBatchJobCommand { JobExternalId = jobExternalId });
+            return Ok(result.Payload);
+        }
+        catch (NotFoundException)
+        {
+            return NotFound();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+        catch (ForbiddenAccessException)
+        {
+            return Forbid();
+        }
+    }
+
+    [HttpPost("batch/{jobExternalId:guid}/cancel")]
+    [ProducesResponseType(typeof(AiBatchJobDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<AiBatchJobDto>> CancelBatch(Guid jobExternalId)
+    {
+        try
+        {
+            var result = await _mediator.Send(new CancelAiBatchJobCommand { JobExternalId = jobExternalId });
+            return Ok(result.Payload);
+        }
+        catch (NotFoundException)
+        {
+            return NotFound();
+        }
+        catch (ForbiddenAccessException)
+        {
+            return Forbid();
+        }
+    }
 }

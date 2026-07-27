@@ -48,6 +48,7 @@ namespace Fistix.TaskManager.WebApp
       services.AddScoped<TodoDataService>();
       services.AddScoped<TodoStateService>();
       services.AddScoped<ClassificationHubService>();
+      services.AddScoped<AiBatchHubService>();
       services.AddScoped<ThemeService>();
     }
   }

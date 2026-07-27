@@ -17,6 +17,7 @@ namespace Fistix.TaskManager.DataLayer
     public DbSet<ToolExecutionLog> ToolExecutionLogs { get; set; }
     public DbSet<Sprint> Sprints { get; set; }
     public DbSet<SprintTodo> SprintTodos { get; set; }
+    public DbSet<AiBatchJob> AiBatchJobs { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -32,6 +33,7 @@ namespace Fistix.TaskManager.DataLayer
       ToolExecutionLogModelConfig(modelBuilder);
       SprintModelConfig(modelBuilder);
       SprintTodoModelConfig(modelBuilder);
+      AiBatchJobModelConfig(modelBuilder);
     }
 
     private void TodoTaskModelConfig(ModelBuilder modelBuilder)
@@ -50,6 +52,32 @@ namespace Fistix.TaskManager.DataLayer
         entityModel.Property(p => p.CreatedByUserId)
           .IsRequired();
         entityModel.HasIndex(p => p.CreatedByUserId);
+        entityModel.Property(p => p.ImportTag)
+          .HasMaxLength(100);
+        entityModel.HasIndex(p => new { p.CreatedByUserId, p.ImportTag });
+      });
+    }
+
+    private void AiBatchJobModelConfig(ModelBuilder modelBuilder)
+    {
+      modelBuilder.Entity<AiBatchJob>(entityModel =>
+      {
+        entityModel.ToTable("AiBatchJob");
+        entityModel.HasKey(k => k.Id);
+        entityModel.Property(p => p.Id).ValueGeneratedOnAdd();
+        entityModel.Property(p => p.ExternalId)
+          .HasDefaultValueSql("gen_random_uuid()")
+          .IsRequired();
+        entityModel.HasIndex(k => k.ExternalId).IsUnique();
+        entityModel.Property(p => p.CreatedByUserId).IsRequired();
+        entityModel.HasIndex(p => p.CreatedByUserId);
+        entityModel.HasIndex(p => p.Status);
+        entityModel.Property(p => p.StepsCsv).HasMaxLength(200).IsRequired();
+        entityModel.Property(p => p.CurrentStep).HasMaxLength(50).IsRequired();
+        entityModel.Property(p => p.Status).HasMaxLength(50).IsRequired();
+        entityModel.Property(p => p.ImportTag).HasMaxLength(100);
+        entityModel.Property(p => p.LastError).HasMaxLength(2000);
+        entityModel.Property(p => p.TodoExternalIdsJson).IsRequired();
       });
     }
     private void UserProfileModelConfig(ModelBuilder modelBuilder)

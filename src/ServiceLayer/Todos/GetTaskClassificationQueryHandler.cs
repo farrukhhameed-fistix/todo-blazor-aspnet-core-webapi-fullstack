@@ -37,7 +37,11 @@ public class GetTaskClassificationQueryHandler : IRequestHandler<GetTaskClassifi
         return new GetTaskClassificationQueryResult
         {
             Payload = metadata is null
-                ? new TaskClassificationDto { TodoExternalId = query.TodoExternalId }
+                ? new TaskClassificationDto
+                {
+                    TodoExternalId = query.TodoExternalId,
+                    Status = ClassificationStatus.None
+                }
                 : MapMetadata(query.TodoExternalId, metadata)
         };
     }
@@ -50,7 +54,9 @@ public class GetTaskClassificationQueryHandler : IRequestHandler<GetTaskClassifi
             SuggestedPriority = metadata.AiPriority,
             Confidence = metadata.ConfidenceScore,
             Reason = metadata.AiPriorityReason,
-            Status = metadata.ClassificationStatus ?? ClassificationStatus.Pending,
+            Status = string.IsNullOrWhiteSpace(metadata.ClassificationStatus)
+                ? ClassificationStatus.None
+                : metadata.ClassificationStatus,
             Model = metadata.AiPriorityModel,
             FromCache = true,
             GeneratedAt = metadata.UpdatedAt ?? metadata.CreatedAt

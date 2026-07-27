@@ -193,7 +193,7 @@ public class ClassificationProcessor : IClassificationProcessor
             SuggestedPriority = metadata.AiPriority,
             Confidence = metadata.ConfidenceScore,
             Reason = metadata.AiPriorityReason,
-            Status = metadata.ClassificationStatus ?? ClassificationStatus.Pending,
+            Status = metadata.ClassificationStatus ?? ClassificationStatus.None,
             Model = metadata.AiPriorityModel,
             FromCache = fromCache,
             GeneratedAt = metadata.UpdatedAt ?? metadata.CreatedAt

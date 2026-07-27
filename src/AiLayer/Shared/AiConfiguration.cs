@@ -114,6 +114,16 @@ public class AiFeaturesConfiguration
     public bool EnableAgents { get; set; } = false;
     public AiRateLimitConfiguration AgentsRateLimit { get; set; } = new();
     public bool EnableMcp { get; set; } = false;
+
+    public AiBatchConfiguration Batch { get; set; } = new();
+}
+
+public class AiBatchConfiguration
+{
+    public int StuckAfterSeconds { get; set; } = 120;
+    public int ItemTimeoutMs { get; set; } = 90_000;
+    public int DefaultBatchSize { get; set; } = 5;
+    public int DefaultDelayMsBetweenItems { get; set; } = 500;
 }
 
 public class SemanticSearchConfiguration

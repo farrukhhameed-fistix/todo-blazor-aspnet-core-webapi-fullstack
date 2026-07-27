@@ -203,7 +203,7 @@
 
         Classification = dto;
         SyncClassificationToTodoItem();
-        IsClassifying = dto.Status == "Pending";
+        IsClassifying = IsPendingClassification(dto);
         _ = InvokeAsync(StateHasChanged);
     }
 
@@ -244,7 +244,7 @@
             return;
         }
 
-        IsClassifying = Classification?.Status == "Pending" || Classification is null;
+        IsClassifying = false;
         ClassificationError = null;
 
         try
@@ -267,9 +267,12 @@
         }
         finally
         {
-            IsClassifying = Classification?.Status == "Pending";
+            IsClassifying = IsPendingClassification(Classification);
         }
     }
+
+    private static bool IsPendingClassification(TaskClassificationDto? dto) =>
+        string.Equals(dto?.Status, "Pending", StringComparison.OrdinalIgnoreCase);
 
     private async System.Threading.Tasks.Task RetryClassification()
     {
@@ -296,7 +299,7 @@
         }
         finally
         {
-            IsClassifying = Classification?.Status == "Pending";
+            IsClassifying = IsPendingClassification(Classification);
         }
     }
 
