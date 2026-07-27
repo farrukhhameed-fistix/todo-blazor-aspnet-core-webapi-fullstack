@@ -10,6 +10,7 @@ public static class SignalRServiceExtension
     {
         services.AddSignalR();
         services.AddSingleton<IClassificationNotifier, SignalRClassificationNotifier>();
+        services.AddSingleton<IAiBatchNotifier, SignalRAiBatchNotifier>();
         return services;
     }
 }

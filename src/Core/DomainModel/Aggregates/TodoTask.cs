@@ -16,6 +16,10 @@ namespace Fistix.TaskManager.Core.DomainModel.Aggregates
     public string Category { get; set; }
     public string AssignedTo { get; set; }
     public Guid CreatedByUserId { get; set; }
+
+    /// <summary>Optional tag for CSV/eval imports so a set can be deleted and re-imported.</summary>
+    public string? ImportTag { get; set; }
+
     public virtual TodoAiMetadata? AiMetadata { get; set; }
   }
 }

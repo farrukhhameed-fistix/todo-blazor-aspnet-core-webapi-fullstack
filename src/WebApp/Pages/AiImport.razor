@@ -1,0 +1,480 @@
+@page "/ai-import"
+@attribute [Authorize]
+@using Fistix.TaskManager.ViewModel.Commands.Todos
+@using Fistix.TaskManager.ViewModel.Dtos
+@using Fistix.TaskManager.WebApp.Services
+@using Fistix.TaskManager.WebApp.Services.DataServices
+@inject TodoDataService TodoDataService
+@inject AiBatchHubService AiBatchHubService
+@inject ISnackbar Snackbar
+@implements IAsyncDisposable
+
+<MudText Typo="Typo.h4" GutterBottom="true">CSV Import &amp; AI Batch</MudText>
+<MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+  Import tasks without AI metadata, then select an import batch and run embedding / classify / summarize.
+</MudText>
+
+<MudGrid>
+  <MudItem xs="12" md="6">
+    <MudPaper Class="pa-4" Elevation="1">
+      <MudText Typo="Typo.h6" Class="mb-3">1. Import CSV</MudText>
+      <MudStack Spacing="3">
+        <MudFileUpload T="IBrowserFile" Accept=".csv,text/csv" FilesChanged="OnFileSelected">
+          <ActivatorContent>
+            <MudButton Variant="Variant.Outlined"
+                       Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.UploadFile">
+              @(_selectedFile?.Name ?? "Choose CSV")
+            </MudButton>
+          </ActivatorContent>
+        </MudFileUpload>
+        <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Start">
+          <MudTextField @bind-Value="_importTag" Label="Import batch code" Variant="Variant.Outlined"
+                        HelperText="Unique per import by default. Reuse only if replacing."
+                        Class="flex-grow-1" />
+          <MudButton Variant="Variant.Text" Class="mt-1" OnClick="RegenerateImportTag"
+                     StartIcon="@Icons.Material.Filled.Refresh">New</MudButton>
+        </MudStack>
+        <MudCheckBox @bind-Value="_replaceExisting" Label="Replace existing todos with this tag" Color="Color.Primary" />
+        <MudStack Row="true" Spacing="2">
+          <MudButton Variant="Variant.Outlined" Disabled="_busy || _selectedFile is null" OnClick="() => ImportAsync(dryRun: true)">
+            Dry run
+          </MudButton>
+          <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_busy || _selectedFile is null" OnClick="() => ImportAsync(dryRun: false)">
+            Import
+          </MudButton>
+        </MudStack>
+        @if (_importResult is not null)
+        {
+          <MudAlert Severity="Severity.Info" Dense="true">
+            Tag <strong>@_importResult.ImportTag</strong>: imported @_importResult.ImportedCount,
+            skipped @_importResult.SkippedCount
+            @if (_importResult.DryRun) { <span>(dry run)</span> }
+          </MudAlert>
+          @if (_importResult.Errors.Count > 0)
+          {
+            <MudText Typo="Typo.caption" Color="Color.Error">
+              @_importResult.Errors.Count row error(s). First: R@_importResult.Errors[0].RowNumber — @_importResult.Errors[0].Message
+            </MudText>
+          }
+        }
+      </MudStack>
+    </MudPaper>
+  </MudItem>
+
+  <MudItem xs="12" md="6">
+    <MudPaper Class="pa-4" Elevation="1">
+      <MudText Typo="Typo.h6" Class="mb-3">2. Process AI (batch)</MudText>
+      <MudStack Spacing="3">
+        <MudSelect T="string" @bind-Value="_batchImportTag" Label="Select import batch" Variant="Variant.Outlined"
+                   HelperText="Choose a step-1 import to process"
+                   Clearable="true">
+          @foreach (var batch in _importBatches)
+          {
+            <MudSelectItem Value="@batch.ImportTag">
+              @batch.ImportTag (@batch.TodoCount tasks · @batch.AiStatus)
+            </MudSelectItem>
+          }
+        </MudSelect>
+        @if (_selectedBatch is not null)
+        {
+          <MudText Typo="Typo.caption" Color="Color.Secondary">
+            @_selectedBatch.TodoCount tasks · missing embed @_selectedBatch.MissingEmbeddings /
+            classify @_selectedBatch.MissingClassify / summary @_selectedBatch.MissingSummary
+          </MudText>
+        }
+        <MudStack Row="true" Spacing="2">
+          <MudCheckBox @bind-Value="_stepEmbed" Label="Embed" Color="Color.Primary" />
+          <MudCheckBox @bind-Value="_stepClassify" Label="Classify" Color="Color.Primary" />
+          <MudCheckBox @bind-Value="_stepSummarize" Label="Summarize" Color="Color.Primary" />
+        </MudStack>
+        <MudNumericField @bind-Value="_batchSize" Label="Batch size" Min="1" Max="50" Variant="Variant.Outlined" />
+        <MudNumericField @bind-Value="_delayMs" Label="Delay ms between items" Min="0" Max="60000" Variant="Variant.Outlined" />
+        <MudCheckBox @bind-Value="_onlyMissing" Label="Only missing (skip already processed)" Color="Color.Primary" />
+        <MudButton Variant="Variant.Filled" Color="Color.Secondary"
+                   Disabled="_busy || string.IsNullOrWhiteSpace(_batchImportTag)"
+                   OnClick="StartBatchAsync">
+          Start batch
+        </MudButton>
+      </MudStack>
+    </MudPaper>
+  </MudItem>
+
+  <MudItem xs="12">
+    <MudPaper Class="pa-4" Elevation="1">
+      <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
+        <MudText Typo="Typo.h6">Your import batches</MudText>
+        <MudButton Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Refresh"
+                   Disabled="_busy" OnClick="RefreshImportBatchesAsync">Refresh</MudButton>
+      </MudStack>
+
+      @if (_importBatches.Count == 0)
+      {
+        <MudText Color="Color.Secondary">No CSV imports yet. Complete step 1 to create a batch.</MudText>
+      }
+      else
+      {
+        <MudTable Items="_importBatches" Hover="true" Dense="true" Breakpoint="Breakpoint.Sm">
+          <HeaderContent>
+            <MudTh>Batch code</MudTh>
+            <MudTh>Tasks</MudTh>
+            <MudTh>AI status</MudTh>
+            <MudTh>Imported</MudTh>
+            <MudTh>Actions</MudTh>
+          </HeaderContent>
+          <RowTemplate>
+            <MudTd DataLabel="Batch">
+              <MudText Typo="Typo.body2"><code>@context.ImportTag</code></MudText>
+            </MudTd>
+            <MudTd DataLabel="Tasks">@context.TodoCount</MudTd>
+            <MudTd DataLabel="AI">
+              <MudChip T="string" Size="Size.Small" Color="@AiStatusColor(context.AiStatus)">@context.AiStatus</MudChip>
+            </MudTd>
+            <MudTd DataLabel="Imported">@context.NewestCreatedOn.ToLocalTime().ToString("g")</MudTd>
+            <MudTd DataLabel="Actions">
+              <MudStack Row="true" Spacing="1">
+                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
+                           Disabled="_busy"
+                           OnClick="@(() => SelectBatchForProcess(context.ImportTag))">
+                  Process
+                </MudButton>
+                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error"
+                           Disabled="_busy"
+                           OnClick="@(() => DeleteImportByTagAsync(context.ImportTag))">
+                  Delete
+                </MudButton>
+              </MudStack>
+            </MudTd>
+          </RowTemplate>
+        </MudTable>
+      }
+    </MudPaper>
+  </MudItem>
+
+  <MudItem xs="12">
+    <MudPaper Class="pa-4" Elevation="1">
+      <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
+        <MudText Typo="Typo.h6">Batch progress</MudText>
+        <MudStack Row="true" Spacing="1">
+          <MudButton Size="Size.Small" Variant="Variant.Outlined"
+                     Disabled="@(_busy || !CanPause)"
+                     OnClick="PauseAsync">Pause</MudButton>
+          <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
+                     Disabled="@(_busy || !CanContinue)"
+                     OnClick="ContinueAsync">Continue</MudButton>
+          <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error"
+                     Disabled="@(_busy || !CanCancel)"
+                     OnClick="CancelAsync">Cancel</MudButton>
+        </MudStack>
+      </MudStack>
+
+      @if (_job is null)
+      {
+        <MudText Color="Color.Secondary">No active batch job.</MudText>
+      }
+      else
+      {
+        <MudChip T="string" Color="@StatusColor(_job.Status)" Class="mb-2">@_job.Status</MudChip>
+        <MudText Typo="Typo.body2" Class="mb-1">
+          Step <strong>@_job.CurrentStep</strong> · @_job.Cursor / @_job.Total
+          · completed @_job.Completed · failed @_job.Failed · skipped @_job.Skipped
+        </MudText>
+        <MudProgressLinear Value="@_job.PercentComplete" Color="Color.Primary" Class="mb-2" />
+        <MudText Typo="Typo.caption" Color="Color.Secondary">
+          @_job.PercentComplete% · Job @_job.ExternalId
+          @if (!string.IsNullOrWhiteSpace(_job.ImportTag)) { <span>· tag @_job.ImportTag</span> }
+        </MudText>
+        @if (!string.IsNullOrWhiteSpace(_job.LastError))
+        {
+          <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">@_job.LastError</MudAlert>
+        }
+      }
+    </MudPaper>
+  </MudItem>
+</MudGrid>
+
+@code {
+  private IBrowserFile? _selectedFile;
+  private string _importTag = NewImportTag();
+  private bool _replaceExisting;
+  private TodoCsvImportResultDto? _importResult;
+
+  private string? _batchImportTag;
+  private List<TodoImportBatchDto> _importBatches = [];
+  private bool _stepEmbed = true;
+  private bool _stepClassify = true;
+  private bool _stepSummarize = true;
+  private int _batchSize = 5;
+  private int _delayMs = 500;
+  private bool _onlyMissing = true;
+
+  private AiBatchJobDto? _job;
+  private bool _busy;
+
+  private TodoImportBatchDto? _selectedBatch =>
+      _importBatches.FirstOrDefault(b => b.ImportTag == _batchImportTag);
+
+  private bool CanPause =>
+      _job is not null
+      && (_job.Status == "Running" || _job.Status == "Stuck");
+
+  private bool CanContinue =>
+      _job is not null
+      && (_job.Status == "Paused" || _job.Status == "Stuck" || _job.Status == "Failed");
+
+  private bool CanCancel =>
+      _job is not null
+      && _job.Status != "Completed"
+      && _job.Status != "Cancelled";
+
+  protected override async Task OnInitializedAsync()
+  {
+    AiBatchHubService.BatchUpdated += OnBatchUpdated;
+    await RefreshImportBatchesAsync();
+
+    var active = await TodoDataService.GetActiveAiBatch();
+    if (active.IsSucceed && active.Payload is not null)
+    {
+      _job = active.Payload;
+      if (!string.IsNullOrWhiteSpace(active.Payload.ImportTag))
+      {
+        _batchImportTag = active.Payload.ImportTag;
+      }
+
+      await AiBatchHubService.SubscribeToJobAsync(active.Payload.ExternalId);
+    }
+  }
+
+  private void OnFileSelected(IBrowserFile file) => _selectedFile = file;
+
+  private void RegenerateImportTag() => _importTag = NewImportTag();
+
+  private static string NewImportTag() =>
+      $"import-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}";
+
+  private async Task RefreshImportBatchesAsync()
+  {
+    var result = await TodoDataService.GetImportBatches();
+    if (result.IsSucceed && result.Payload is not null)
+    {
+      _importBatches = result.Payload;
+      if (!string.IsNullOrWhiteSpace(_batchImportTag)
+          && _importBatches.All(b => b.ImportTag != _batchImportTag))
+      {
+        _batchImportTag = null;
+      }
+    }
+    else if (!result.IsSucceed)
+    {
+      Snackbar.Add(result.Message ?? "Failed to load imports", Severity.Warning);
+    }
+  }
+
+  private void SelectBatchForProcess(string importTag)
+  {
+    _batchImportTag = importTag;
+    Snackbar.Add($"Selected {importTag} for AI processing", Severity.Info);
+  }
+
+  private async Task ImportAsync(bool dryRun)
+  {
+    if (_selectedFile is null) return;
+    _busy = true;
+    try
+    {
+      await using var stream = _selectedFile.OpenReadStream(maxAllowedSize: 5 * 1024 * 1024);
+      var result = await TodoDataService.ImportCsv(
+        stream,
+        _selectedFile.Name,
+        _importTag,
+        dryRun,
+        _replaceExisting);
+
+      if (!result.IsSucceed || result.Payload is null)
+      {
+        Snackbar.Add(result.Message ?? "Import failed", Severity.Error);
+        return;
+      }
+
+      _importResult = result.Payload;
+      if (!dryRun)
+      {
+        _batchImportTag = result.Payload.ImportTag;
+        RegenerateImportTag();
+        await RefreshImportBatchesAsync();
+      }
+
+      Snackbar.Add(dryRun ? "Dry run OK" : $"Imported {result.Payload.ImportedCount} todos", Severity.Success);
+    }
+    finally
+    {
+      _busy = false;
+    }
+  }
+
+  private async Task StartBatchAsync()
+  {
+    if (string.IsNullOrWhiteSpace(_batchImportTag)) return;
+    _busy = true;
+    try
+    {
+      var steps = new List<string>();
+      if (_stepEmbed) steps.Add("Embedding");
+      if (_stepClassify) steps.Add("Classify");
+      if (_stepSummarize) steps.Add("Summarize");
+      if (steps.Count == 0)
+      {
+        Snackbar.Add("Select at least one step", Severity.Warning);
+        return;
+      }
+
+      var result = await TodoDataService.StartAiBatch(new StartAiBatchJobCommand
+      {
+        ImportTag = _batchImportTag,
+        Steps = steps,
+        BatchSize = _batchSize,
+        DelayMsBetweenItems = _delayMs,
+        OnlyMissing = _onlyMissing
+      });
+
+      if (!result.IsSucceed || result.Payload is null)
+      {
+        Snackbar.Add(result.Message ?? "Failed to start batch", Severity.Error);
+        return;
+      }
+
+      _job = result.Payload;
+      await AiBatchHubService.SubscribeToJobAsync(result.Payload.ExternalId);
+      Snackbar.Add("Batch started", Severity.Success);
+    }
+    finally
+    {
+      _busy = false;
+    }
+  }
+
+  private async Task PauseAsync()
+  {
+    if (_job is null) return;
+    _busy = true;
+    try
+    {
+      var result = await TodoDataService.PauseAiBatch(_job.ExternalId);
+      if (result.IsSucceed && result.Payload is not null) _job = result.Payload;
+      else Snackbar.Add(result.Message ?? "Pause failed", Severity.Error);
+    }
+    finally { _busy = false; }
+  }
+
+  private async Task ContinueAsync()
+  {
+    if (_job is null) return;
+    _busy = true;
+    try
+    {
+      var result = await TodoDataService.ContinueAiBatch(_job.ExternalId);
+      if (result.IsSucceed && result.Payload is not null) _job = result.Payload;
+      else Snackbar.Add(result.Message ?? "Continue failed", Severity.Error);
+    }
+    finally { _busy = false; }
+  }
+
+  private async Task CancelAsync()
+  {
+    if (_job is null) return;
+    _busy = true;
+    try
+    {
+      var result = await TodoDataService.CancelAiBatch(_job.ExternalId);
+      if (result.IsSucceed && result.Payload is not null) _job = result.Payload;
+      else Snackbar.Add(result.Message ?? "Cancel failed", Severity.Error);
+    }
+    finally { _busy = false; }
+  }
+
+  private async Task DeleteImportByTagAsync(string importTag)
+  {
+    _busy = true;
+    try
+    {
+      if (_job is not null
+          && !string.IsNullOrWhiteSpace(_job.ImportTag)
+          && string.Equals(_job.ImportTag, importTag, StringComparison.Ordinal)
+          && _job.Status != "Completed"
+          && _job.Status != "Cancelled")
+      {
+        await TodoDataService.CancelAiBatch(_job.ExternalId);
+        _job = null;
+      }
+
+      var deleted = await TodoDataService.DeleteImported(importTag);
+      if (!deleted.IsSucceed)
+      {
+        Snackbar.Add(deleted.Message ?? "Delete failed", Severity.Error);
+        return;
+      }
+
+      if (_batchImportTag == importTag)
+      {
+        _batchImportTag = null;
+      }
+
+      if (_importResult?.ImportTag == importTag)
+      {
+        _importResult = null;
+      }
+
+      await RefreshImportBatchesAsync();
+      Snackbar.Add($"Removed {deleted.Payload?.DeletedCount ?? 0} todos ({importTag})", Severity.Success);
+    }
+    finally { _busy = false; }
+  }
+
+  private void OnBatchUpdated(AiBatchJobDto dto)
+  {
+    _ = InvokeAsync(async () =>
+    {
+      _job = dto;
+      if (dto.Status is "Completed" or "Cancelled" or "Failed")
+      {
+        await RefreshImportBatchesAsync();
+      }
+
+      StateHasChanged();
+    });
+  }
+
+  private static Color StatusColor(string status) => status switch
+  {
+    "Running" => Color.Info,
+    "Paused" => Color.Warning,
+    "Completed" => Color.Success,
+    "Cancelled" => Color.Default,
+    "Failed" => Color.Error,
+    "Stuck" => Color.Error,
+    _ => Color.Primary
+  };
+
+  private static Color AiStatusColor(string status) => status switch
+  {
+    "Complete" => Color.Success,
+    "Partial" => Color.Warning,
+    _ => Color.Default
+  };
+
+  public async ValueTask DisposeAsync()
+  {
+    AiBatchHubService.BatchUpdated -= OnBatchUpdated;
+    if (_job is not null)
+    {
+      try
+      {
+        await AiBatchHubService.LeaveJobAsync(_job.ExternalId);
+      }
+      catch
+      {
+        // best effort
+      }
+    }
+  }
+}

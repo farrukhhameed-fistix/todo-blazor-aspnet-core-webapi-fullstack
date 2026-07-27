@@ -5,6 +5,7 @@ using Fistix.TaskManager.WebApp.Extentions;
 using Fistix.TaskManager.WebApp.Models;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -293,6 +294,164 @@ namespace Fistix.TaskManager.WebApp.Services.DataServices
       if (response.IsSuccessStatusCode)
       {
         result.Payload = await response.Content.ReadFromJsonAsync<SprintDto>();
+        result.IsSucceed = true;
+      }
+      else
+      {
+        result.IsSucceed = false;
+        result.Message = await response.GetErrorMessage();
+      }
+
+      return result;
+    }
+
+    public async Task<ApiCallResult<TodoCsvImportResultDto>> ImportCsv(
+      Stream fileStream,
+      string fileName,
+      string? importTag,
+      bool dryRun,
+      bool replaceExistingTag)
+    {
+      var result = new ApiCallResult<TodoCsvImportResultDto>();
+      using var content = new MultipartFormDataContent();
+      var streamContent = new StreamContent(fileStream);
+      content.Add(streamContent, "file", fileName);
+      if (!string.IsNullOrWhiteSpace(importTag))
+      {
+        content.Add(new StringContent(importTag), "importTag");
+      }
+
+      content.Add(new StringContent(dryRun ? "true" : "false"), "dryRun");
+      content.Add(new StringContent(replaceExistingTag ? "true" : "false"), "replaceExistingTag");
+
+      var response = await _httpClient.PostAsync("api/todos/import/csv", content);
+      if (response.IsSuccessStatusCode)
+      {
+        result.Payload = await response.Content.ReadFromJsonAsync<TodoCsvImportResultDto>();
+        result.IsSucceed = true;
+      }
+      else
+      {
+        result.IsSucceed = false;
+        result.Message = await response.GetErrorMessage();
+      }
+
+      return result;
+    }
+
+    public async Task<ApiCallResult<DeleteImportedTodosResultDto>> DeleteImported(string importTag)
+    {
+      var result = new ApiCallResult<DeleteImportedTodosResultDto>();
+      var response = await _httpClient.DeleteAsync($"api/todos/import/{Uri.EscapeDataString(importTag)}");
+      if (response.IsSuccessStatusCode)
+      {
+        result.Payload = await response.Content.ReadFromJsonAsync<DeleteImportedTodosResultDto>();
+        result.IsSucceed = true;
+      }
+      else
+      {
+        result.IsSucceed = false;
+        result.Message = await response.GetErrorMessage();
+      }
+
+      return result;
+    }
+
+    public async Task<ApiCallResult<List<TodoImportBatchDto>>> GetImportBatches()
+    {
+      var result = new ApiCallResult<List<TodoImportBatchDto>>();
+      var response = await _httpClient.GetAsync("api/todos/imports");
+      if (response.IsSuccessStatusCode)
+      {
+        result.Payload = await response.Content.ReadFromJsonAsync<List<TodoImportBatchDto>>() ?? [];
+        result.IsSucceed = true;
+      }
+      else
+      {
+        result.IsSucceed = false;
+        result.Message = await response.GetErrorMessage();
+      }
+
+      return result;
+    }
+
+    public async Task<ApiCallResult<AiBatchJobDto>> StartAiBatch(StartAiBatchJobCommand command)
+    {
+      var result = new ApiCallResult<AiBatchJobDto>();
+      var response = await _httpClient.PostAsJsonAsync("api/ai/batch", command);
+      if (response.IsSuccessStatusCode)
+      {
+        result.Payload = await response.Content.ReadFromJsonAsync<AiBatchJobDto>();
+        result.IsSucceed = true;
+      }
+      else
+      {
+        result.IsSucceed = false;
+        result.Message = await response.GetErrorMessage();
+      }
+
+      return result;
+    }
+
+    public async Task<ApiCallResult<AiBatchJobDto?>> GetActiveAiBatch()
+    {
+      var result = new ApiCallResult<AiBatchJobDto?>();
+      var response = await _httpClient.GetAsync("api/ai/batch/active");
+      if (response.StatusCode == System.Net.HttpStatusCode.NoContent)
+      {
+        result.IsSucceed = true;
+        result.Payload = null;
+        return result;
+      }
+
+      if (response.IsSuccessStatusCode)
+      {
+        result.Payload = await response.Content.ReadFromJsonAsync<AiBatchJobDto>();
+        result.IsSucceed = true;
+      }
+      else
+      {
+        result.IsSucceed = false;
+        result.Message = await response.GetErrorMessage();
+      }
+
+      return result;
+    }
+
+    public async Task<ApiCallResult<AiBatchJobDto>> GetAiBatch(Guid jobExternalId)
+    {
+      var result = new ApiCallResult<AiBatchJobDto>();
+      var response = await _httpClient.GetAsync($"api/ai/batch/{jobExternalId}");
+      if (response.IsSuccessStatusCode)
+      {
+        result.Payload = await response.Content.ReadFromJsonAsync<AiBatchJobDto>();
+        result.IsSucceed = true;
+      }
+      else
+      {
+        result.IsSucceed = false;
+        result.Message = await response.GetErrorMessage();
+      }
+
+      return result;
+    }
+
+    public async Task<ApiCallResult<AiBatchJobDto>> PauseAiBatch(Guid jobExternalId) =>
+      await PostBatchAction($"api/ai/batch/{jobExternalId}/pause");
+
+    public async Task<ApiCallResult<AiBatchJobDto>> ContinueAiBatch(Guid jobExternalId) =>
+      await PostBatchAction($"api/ai/batch/{jobExternalId}/continue");
+
+    public async Task<ApiCallResult<AiBatchJobDto>> CancelAiBatch(Guid jobExternalId) =>
+      await PostBatchAction($"api/ai/batch/{jobExternalId}/cancel");
+
+    private async Task<ApiCallResult<AiBatchJobDto>> PostBatchAction(string url)
+    {
+      var result = new ApiCallResult<AiBatchJobDto>();
+      var response = await _httpClient.PostAsync(url, null);
+      if (response.IsSuccessStatusCode)
+      {
+        result.Payload = await response.Content.ReadFromJsonAsync<AiBatchJobDto>();
         result.IsSucceed = true;
       }
       else

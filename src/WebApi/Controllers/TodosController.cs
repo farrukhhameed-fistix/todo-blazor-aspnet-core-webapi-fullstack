@@ -120,5 +120,98 @@ namespace Fistix.TaskManager.WebApi.Controllers
         return ApiErrorResponses.UnexpectedError(HttpContext, "Failed to update task");
       }
     }
+
+    /// <summary>
+    /// Imports todos from CSV without creating AI metadata or enqueueing AI work.
+    /// </summary>
+    [HttpPost("import/csv")]
+    [ProducesResponseType(typeof(TodoCsvImportResultDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> ImportCsv(
+      IFormFile? file,
+      [FromForm] string? importTag,
+      [FromForm] bool dryRun = false,
+      [FromForm] bool replaceExistingTag = false)
+    {
+      if (file is null || file.Length == 0)
+      {
+        return BadRequest(new ProblemDetails { Detail = "CSV file is required." });
+      }
+
+      try
+      {
+        await using var stream = file.OpenReadStream();
+        using var reader = new System.IO.StreamReader(stream);
+        var content = await reader.ReadToEndAsync();
+
+        var result = await _mediator.Send(new ImportTodoTasksFromCsvCommand
+        {
+          CsvContent = content,
+          ImportTag = importTag,
+          DryRun = dryRun,
+          ReplaceExistingTag = replaceExistingTag
+        });
+
+        return Ok(result.Payload);
+      }
+      catch (ForbiddenAccessException)
+      {
+        return Forbid();
+      }
+      catch (Exception ex)
+      {
+        _logger.LogError(ex, "Error importing todos from CSV");
+        return ApiErrorResponses.UnexpectedError(HttpContext, "Failed to import CSV");
+      }
+    }
+
+    [HttpGet("imports")]
+    [ProducesResponseType(typeof(List<TodoImportBatchDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> GetImportBatches()
+    {
+      try
+      {
+        var result = await _mediator.Send(new GetTodoImportBatchesQuery());
+        return Ok(result.Payload);
+      }
+      catch (ForbiddenAccessException)
+      {
+        return Forbid();
+      }
+      catch (Exception ex)
+      {
+        _logger.LogError(ex, "Error listing todo import batches");
+        return ApiErrorResponses.UnexpectedError(HttpContext, "Failed to list imports");
+      }
+    }
+
+    [HttpDelete("import/{importTag}")]
+    [ProducesResponseType(typeof(DeleteImportedTodosResultDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> DeleteImported(string importTag)
+    {
+      if (string.IsNullOrWhiteSpace(importTag))
+      {
+        return BadRequest(new ProblemDetails { Detail = "Import tag is required." });
+      }
+
+      try
+      {
+        var result = await _mediator.Send(new DeleteImportedTodosCommand { ImportTag = importTag });
+        return Ok(result.Payload);
+      }
+      catch (ForbiddenAccessException)
+      {
+        return Forbid();
+      }
+      catch (Exception ex)
+      {
+        _logger.LogError(ex, "Error deleting imported todos for tag {ImportTag}", importTag);
+        return ApiErrorResponses.UnexpectedError(HttpContext, "Failed to delete imported todos");
+      }
+    }
   }
 }

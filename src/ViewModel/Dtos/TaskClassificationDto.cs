@@ -11,7 +11,8 @@ public class TaskClassificationDto
     public string? SuggestedPriority { get; set; }
     public float? Confidence { get; set; }
     public string? Reason { get; set; }
-    public string Status { get; set; } = "Pending";
+    /// <summary>None, Pending, Completed, or Failed. Defaults to None (not analyzing).</summary>
+    public string Status { get; set; } = "None";
     public string? Model { get; set; }
     public bool FromCache { get; set; }
     public DateTime? GeneratedAt { get; set; }

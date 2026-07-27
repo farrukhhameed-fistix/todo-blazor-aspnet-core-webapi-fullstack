@@ -52,11 +52,17 @@ public class SprintPlanningToolsTests
         public Task<bool> Create(TodoTask todoTask, CancellationToken cancellationToken) =>
             Task.FromResult(true);
 
+        public Task CreateManyAsync(IReadOnlyList<TodoTask> todoTasks, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
         public Task<bool> Update(TodoTask todoTask, CancellationToken calcellationToken) =>
             Task.FromResult(true);
 
         public Task<bool> Delete(Guid id, CancellationToken cancellationToken) =>
             Task.FromResult(true);
+
+        public Task<int> DeleteByImportTagAsync(Guid ownerExternalId, string importTag, CancellationToken cancellationToken) =>
+            Task.FromResult(0);
 
         public Task<TodoTask> Get(Guid id, CancellationToken cancellationToken) =>
             Task.FromResult(todos.First(t => t.ExternalId == id));
@@ -66,6 +72,32 @@ public class SprintPlanningToolsTests
 
         public Task<List<TodoTask>> GetByOwner(Guid ownerExternalId, CancellationToken cancellationToken) =>
             Task.FromResult(todos.Where(t => t.CreatedByUserId == ownerExternalId).ToList());
+
+        public Task<List<TodoTask>> GetByOwnerAndImportTagAsync(
+            Guid ownerExternalId,
+            string importTag,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(todos.Where(t => t.CreatedByUserId == ownerExternalId && t.ImportTag == importTag).ToList());
+
+        public Task<IReadOnlyList<TodoImportBatchSummary>> GetImportBatchesByOwnerAsync(
+            Guid ownerExternalId,
+            CancellationToken cancellationToken)
+        {
+            var summaries = todos
+                .Where(t => t.CreatedByUserId == ownerExternalId && !string.IsNullOrWhiteSpace(t.ImportTag))
+                .GroupBy(t => t.ImportTag!)
+                .Select(g => new TodoImportBatchSummary(
+                    g.Key,
+                    g.Count(),
+                    g.Min(x => x.CreatedOn),
+                    g.Max(x => x.CreatedOn),
+                    g.Count(),
+                    g.Count(),
+                    g.Count()))
+                .OrderByDescending(s => s.NewestCreatedOn)
+                .ToList();
+            return Task.FromResult<IReadOnlyList<TodoImportBatchSummary>>(summaries);
+        }
     }
 
     private sealed class FakeSprintRepository : ISprintRepository

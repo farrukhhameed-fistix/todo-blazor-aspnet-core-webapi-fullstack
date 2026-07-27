@@ -87,5 +87,6 @@ app.UseCommonService(masterConfig, app.Environment);
 
 app.MapControllers();
 app.MapHub<ClassificationHub>(ClassificationHub.HubPath);
+app.MapHub<AiBatchHub>(AiBatchHub.HubPath);
 
 await app.RunAsync();
