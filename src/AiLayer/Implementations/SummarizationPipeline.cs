@@ -2,7 +2,9 @@ using Microsoft.Extensions.Logging;
 using Microsoft.SemanticKernel;
 using Fistix.TaskManager.AiLayer.Abstractions;
 using Fistix.TaskManager.AiLayer.Models;
+using Fistix.TaskManager.AiLayer.Observability;
 using Fistix.TaskManager.AiLayer.Shared;
+using System.Diagnostics;
 using System.Net;
 
 namespace Fistix.TaskManager.AiLayer.Implementations;
@@ -16,6 +18,7 @@ public class SummarizationPipeline : IAiPipeline
     private readonly Kernel _kernel;
     private readonly SemanticKernelOrchestrator _orchestrator;
     private readonly AiConfiguration _aiConfig;
+    private readonly IAiTelemetry _telemetry;
     private readonly ILogger<SummarizationPipeline> _logger;
 
     private const string SummarizationPrompt = @"
@@ -44,12 +47,14 @@ SUMMARY:";
         Kernel kernel,
         SemanticKernelOrchestrator orchestrator,
         ILogger<SummarizationPipeline> logger,
-        AiConfiguration? aiConfig = null)
+        AiConfiguration? aiConfig = null,
+        IAiTelemetry? telemetry = null)
     {
         _kernel = kernel ?? throw new ArgumentNullException(nameof(kernel));
         _orchestrator = orchestrator ?? throw new ArgumentNullException(nameof(orchestrator));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _aiConfig = aiConfig ?? new AiConfiguration();
+        _telemetry = telemetry ?? NullAiTelemetry.Instance;
     }
 
     public async Task<TResponse> ExecuteAsync<TRequest, TResponse>(TRequest request)
@@ -60,6 +65,11 @@ SUMMARY:";
         {
             throw new ArgumentException($"Request must be of type {nameof(SummarizationRequest)}", nameof(request));
         }
+
+        using var operation = _telemetry.StartOperation(
+            AiTelemetryNames.Features.Summarize,
+            provider: _aiConfig.Provider,
+            todoExternalId: summarizationRequest.TodoExternalId);
 
         _logger.LogInformation("Starting summarization for todo {TodoExternalId}", summarizationRequest.TodoExternalId);
 
@@ -101,6 +111,9 @@ SUMMARY:";
                     modelLabel,
                     summary.Length);
 
+                operation.Activity?.SetTag(AiTelemetryNames.Tags.RequestModel, modelLabel);
+                operation.SetOutcome(AiTelemetryNames.Outcomes.Success);
+
                 var response = new SummarizationResponse
                 {
                     TodoExternalId = summarizationRequest.TodoExternalId,
@@ -123,6 +136,7 @@ SUMMARY:";
             }
         }
 
+        operation.SetOutcome(AiTelemetryNames.Outcomes.Error);
         _logger.LogError(lastException,
             "Error during summarization for todo {TodoExternalId} after all fallback models",
             summarizationRequest.TodoExternalId);
@@ -158,7 +172,8 @@ SUMMARY:";
     private async Task<string> InvokeLlmAsync(Kernel kernel, KernelArguments arguments, string modelLabel)
     {
         var function = kernel.CreateFunctionFromPrompt(SummarizationPrompt);
-        var renderedPrompt = RenderPrompt(arguments);
+        var inputChars = (arguments["title"]?.ToString()?.Length ?? 0)
+                         + (arguments["description"]?.ToString()?.Length ?? 0);
 
         _logger.LogInformation(
             "LLM request -> Provider: {Provider}, Model: {Model}, TitleLength: {TitleLength}, DescriptionLength: {DescriptionLength}",
@@ -167,18 +182,26 @@ SUMMARY:";
             arguments["title"]?.ToString()?.Length ?? 0,
             arguments["description"]?.ToString()?.Length ?? 0);
 
-        _logger.LogDebug(
-            "LLM request details -> Provider: {Provider}, Model: {Model}, Title: {Title}, Description: {Description}, Prompt: {Prompt}",
-            _aiConfig.Provider,
+        if (_aiConfig.Observability.CapturePayloadPreview)
+        {
+            _logger.LogDebug(
+                "LLM request preview -> Model: {Model}, PromptPreview: {PromptPreview}",
+                modelLabel,
+                AiPayloadRedactor.Preview(RenderPrompt(arguments), _aiConfig.Observability));
+        }
+
+        var activity = _telemetry.StartLlmCall(
+            AiTelemetryNames.Features.Summarize,
             modelLabel,
-            arguments["title"],
-            arguments["description"],
-            renderedPrompt);
+            _aiConfig.Provider,
+            inputChars);
+        var sw = Stopwatch.StartNew();
 
         try
         {
             var result = await kernel.InvokeAsync(function, arguments);
             var rawResponse = result.GetValue<string>()?.Trim() ?? string.Empty;
+            sw.Stop();
 
             _logger.LogInformation(
                 "LLM response <- Provider: {Provider}, Model: {Model}, ResponseLength: {ResponseLength}",
@@ -186,16 +209,19 @@ SUMMARY:";
                 modelLabel,
                 rawResponse.Length);
 
-            _logger.LogDebug(
-                "LLM response details <- Provider: {Provider}, Model: {Model}, RawResponse: {RawResponse}",
-                _aiConfig.Provider,
-                modelLabel,
+            _telemetry.CompleteLlmCall(
+                activity,
+                sw.ElapsedMilliseconds,
+                AiTelemetryNames.Outcomes.Success,
+                rawResponse.Length,
                 rawResponse);
 
             return rawResponse;
         }
         catch (HttpOperationException httpEx)
         {
+            sw.Stop();
+            _telemetry.CompleteLlmCall(activity, sw.ElapsedMilliseconds, AiTelemetryNames.Outcomes.Error);
             _logger.LogWarning(
                 "LLM error <- Provider: {Provider}, Model: {Model}, Status: {StatusCode}",
                 _aiConfig.Provider,
@@ -208,6 +234,12 @@ SUMMARY:";
                 _aiConfig.Provider,
                 modelLabel,
                 httpEx.ResponseContent);
+            throw;
+        }
+        catch (Exception)
+        {
+            sw.Stop();
+            _telemetry.CompleteLlmCall(activity, sw.ElapsedMilliseconds, AiTelemetryNames.Outcomes.Error);
             throw;
         }
     }

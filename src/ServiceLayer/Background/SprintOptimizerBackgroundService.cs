@@ -4,6 +4,7 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Fistix.TaskManager.AiLayer.Observability;
 using Fistix.TaskManager.AiLayer.Shared;
 using Fistix.TaskManager.Core.Abstractions.Repositories;
 using Fistix.TaskManager.Core.DomainModel.Aggregates;
@@ -90,6 +91,7 @@ public sealed class SprintOptimizerBackgroundService : BackgroundService
         var agent = scope.ServiceProvider.GetRequiredService<SprintOptimizerAgent>();
         var planningTools = scope.ServiceProvider.GetRequiredService<SprintPlanningTools>();
         var sprintRepository = scope.ServiceProvider.GetRequiredService<ISprintRepository>();
+        var telemetry = scope.ServiceProvider.GetService<IAiTelemetry>() ?? NullAiTelemetry.Instance;
 
         var runnable = await jobs.GetRunnableAsync(cancellationToken);
         var job = runnable.FirstOrDefault();
@@ -118,6 +120,10 @@ public sealed class SprintOptimizerBackgroundService : BackgroundService
 
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var heartbeatTask = HeartbeatLoopAsync(job.ExternalId, linkedCts.Token);
+        using var operation = telemetry.StartOperation(
+            AiTelemetryNames.Features.SprintOptimizer,
+            provider: _aiConfig.Provider,
+            jobExternalId: job.ExternalId);
 
         try
         {
@@ -159,6 +165,7 @@ public sealed class SprintOptimizerBackgroundService : BackgroundService
                 latestAfterPlan.CompletedAt = DateTime.UtcNow;
                 await jobs.UpdateAsync(latestAfterPlan, cancellationToken);
                 await notifier.NotifyAsync(SprintOptimizerJobMapper.ToDto(latestAfterPlan), cancellationToken);
+                operation.SetOutcome(AiTelemetryNames.Outcomes.Cancelled);
                 return true;
             }
 
@@ -181,6 +188,7 @@ public sealed class SprintOptimizerBackgroundService : BackgroundService
             latestAfterPlan.LastError = null;
             await jobs.UpdateAsync(latestAfterPlan, cancellationToken);
             await notifier.NotifyAsync(SprintOptimizerJobMapper.ToDto(latestAfterPlan), cancellationToken);
+            operation.SetOutcome(AiTelemetryNames.Outcomes.Success);
 
             _logger.LogInformation(
                 "Sprint optimizer job {JobId} completed. SprintId={SprintId}",
@@ -189,10 +197,12 @@ public sealed class SprintOptimizerBackgroundService : BackgroundService
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            operation.SetOutcome(AiTelemetryNames.Outcomes.Cancelled);
             throw;
         }
         catch (OperationCanceledException)
         {
+            operation.SetOutcome(AiTelemetryNames.Outcomes.Cancelled);
             var cancelled = await jobs.GetByExternalIdAsync(job.ExternalId, CancellationToken.None) ?? job;
             cancelled.Status = AiBatchJobStatus.Cancelled;
             cancelled.StatusMessage = "Cancelled.";
@@ -202,6 +212,7 @@ public sealed class SprintOptimizerBackgroundService : BackgroundService
         }
         catch (Exception ex)
         {
+            operation.SetOutcome(AiTelemetryNames.Outcomes.Error);
             _logger.LogError(ex, "Sprint optimizer job {JobId} failed", job.ExternalId);
             var failed = await jobs.GetByExternalIdAsync(job.ExternalId, CancellationToken.None) ?? job;
             failed.Status = AiBatchJobStatus.Failed;

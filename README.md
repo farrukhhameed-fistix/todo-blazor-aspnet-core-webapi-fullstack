@@ -84,6 +84,21 @@ Without Aspire: `docker compose up -d` (Postgres on **5433**), set `ConnectionSt
 
 Feature flags live under `Ai:Features` in [`src/WebApi/appsettings.json`](src/WebApi/appsettings.json) (`EnableSummarization`, `EnableEmbeddings`, `EnableRag`, `EnableAgents`, …).
 
+## AI observability (OpenTelemetry)
+
+AI features emit GenAI-oriented traces and metrics on ActivitySource/Meter `TaskManager.Ai` (classify, summarize, RAG, tools, embeddings, sprint optimizer).
+
+| Environment | Where to look |
+|---|---|
+| **Development (Aspire)** | Aspire Dashboard → Traces / Metrics. Filter for `ai.operation/*`, `ai.llm/*`, `ai.tool/*`. |
+| **Production** | Point `OTEL_EXPORTER_OTLP_ENDPOINT` at Grafana Alloy/Tempo (or any OTLP collector). Same instrumentation; no Aspire Dashboard required. |
+
+Config under `Ai:Observability`:
+
+- `Enabled` — master switch  
+- `CapturePayloadPreview` — off by default; when on, truncated prompt/response previews may appear on spans  
+- `RecordTokenUsage` — records provider token counts when available (often missing for Ollama)
+
 ## MCP (Claude Desktop)
 
 Standalone process in `src/McpServer` (stdio). Auth: Auth0 **Device Code** + refresh token (no pasted JWT). Tools: `create_todo`, `update_todo`, `search_todos`, `analyze_workload`.  

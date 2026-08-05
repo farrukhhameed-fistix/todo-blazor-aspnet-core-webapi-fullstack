@@ -1,4 +1,5 @@
 ﻿using Fistix.TaskManager.AiLayer.Abstractions;
+using Fistix.TaskManager.AiLayer.Observability;
 using Fistix.TaskManager.Core.AutoMapperProfiles;
 using Fistix.TaskManager.Core.Config;
 using Fistix.TaskManager.DataLayer;
@@ -38,6 +39,7 @@ namespace Fistix.TaskManager.ServiceLayer
       // SignalR notifier is registered by WebApi; tests register NullAiBatchNotifier.
       services.TryAddSingleton<IAiBatchNotifier, NullAiBatchNotifier>();
       services.TryAddSingleton<ISprintOptimizerNotifier, NullSprintOptimizerNotifier>();
+      services.TryAddSingleton<IAiTelemetry>(_ => NullAiTelemetry.Instance);
       services.AddHostedService<SprintOptimizerBackgroundService>();
             
       services.AddDataLayer(masterConfig);

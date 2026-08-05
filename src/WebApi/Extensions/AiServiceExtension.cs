@@ -1,11 +1,15 @@
-using System;
+#nullable enable
+
 using Fistix.TaskManager.AiLayer.Abstractions;
 using Fistix.TaskManager.AiLayer.Agents;
 using Fistix.TaskManager.AiLayer.Implementations;
+using Fistix.TaskManager.AiLayer.Observability;
 using Fistix.TaskManager.AiLayer.Shared;
 using Fistix.TaskManager.AiLayer.Tools;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using System;
 
 namespace Fistix.TaskManager.WebApi.Extensions;
 
@@ -24,6 +28,9 @@ public static class AiServiceExtension
             return aiConfig;
         });
 
+        // Replace ServiceLayer's NullAiTelemetry TryAdd so WebApi uses real telemetry.
+        services.RemoveAll<IAiTelemetry>();
+        services.AddSingleton<IAiTelemetry, AiTelemetry>();
         services.AddSingleton<SemanticKernelOrchestrator>();
 
         services.AddSingleton(provider =>
@@ -32,7 +39,13 @@ public static class AiServiceExtension
             return orchestrator.CreateKernelAsync().GetAwaiter().GetResult();
         });
 
-        services.AddSingleton<ILlmProviderService, SemanticKernelLlmProvider>();
+        services.AddSingleton<SemanticKernelLlmProvider>();
+        services.AddSingleton<ILlmProviderService>(sp =>
+            new ObservingLlmProvider(
+                sp.GetRequiredService<SemanticKernelLlmProvider>(),
+                sp.GetRequiredService<IAiTelemetry>(),
+                sp.GetRequiredService<AiConfiguration>()));
+
         services.AddSingleton<AiChatClientFactory>();
         services.AddScoped<SummarizationPipeline>();
         services.AddScoped<ClassificationPipeline>();
@@ -46,11 +59,18 @@ public static class AiServiceExtension
         if (string.Equals(embeddingProvider, "onnx", StringComparison.OrdinalIgnoreCase))
         {
             services.AddSingleton<OnnxBgeEmbeddingService>();
-            services.AddSingleton<IEmbeddingService>(sp => sp.GetRequiredService<OnnxBgeEmbeddingService>());
+            services.AddSingleton<IEmbeddingService>(sp =>
+                new ObservingEmbeddingService(
+                    sp.GetRequiredService<OnnxBgeEmbeddingService>(),
+                    sp.GetRequiredService<IAiTelemetry>()));
         }
         else
         {
-            services.AddScoped<IEmbeddingService, SemanticKernelEmbeddingService>();
+            services.AddScoped<SemanticKernelEmbeddingService>();
+            services.AddScoped<IEmbeddingService>(sp =>
+                new ObservingEmbeddingService(
+                    sp.GetRequiredService<SemanticKernelEmbeddingService>(),
+                    sp.GetRequiredService<IAiTelemetry>()));
         }
 
         return services;
