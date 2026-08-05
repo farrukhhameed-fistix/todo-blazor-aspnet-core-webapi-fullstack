@@ -3,10 +3,12 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Fistix.TaskManager.AiLayer.Observability;
 using Fistix.TaskManager.Core.Abstractions.Repositories;
 using Fistix.TaskManager.Core.DomainModel.Aggregates;
 using Fistix.TaskManager.ViewModel.Commands.Todos;
@@ -15,12 +17,13 @@ using Fistix.TaskManager.ViewModel.Dtos;
 namespace Fistix.TaskManager.ServiceLayer.Todos;
 
 /// <summary>
-/// Tools for the MAF sprint planning agent. Scoped per optimize request via <see cref="Configure"/>.
+/// Tools for the MAF sprint planning agent. Scoped per optimize request via <see cref="ConfigureAsync"/>.
 /// </summary>
 public sealed class SprintPlanningTools
 {
     private readonly ITodoTaskRepository _todoTaskRepository;
     private readonly ISprintRepository _sprintRepository;
+    private readonly IAiTelemetry _telemetry;
 
     private Guid _ownerId;
     private int _maxTasks = 12;
@@ -30,10 +33,12 @@ public sealed class SprintPlanningTools
 
     public SprintPlanningTools(
         ITodoTaskRepository todoTaskRepository,
-        ISprintRepository sprintRepository)
+        ISprintRepository sprintRepository,
+        IAiTelemetry? telemetry = null)
     {
         _todoTaskRepository = todoTaskRepository;
         _sprintRepository = sprintRepository;
+        _telemetry = telemetry ?? NullAiTelemetry.Instance;
     }
 
     public Guid? CreatedSprintId { get; private set; }
@@ -261,6 +266,10 @@ public sealed class SprintPlanningTools
             ToolName = toolName,
             Summary = summary
         });
+
+        // Lightweight tool span for Aspire (args omitted; summary is already a safe short string).
+        var activity = _telemetry.StartToolCall(toolName, summary);
+        _telemetry.CompleteToolCall(activity, durationMs: 0, success: true);
     }
 
     private static List<Guid> ParseIds(string raw)

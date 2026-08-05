@@ -52,16 +52,21 @@ public static class Extensions
             logging.IncludeScopes = true;
         });
 
+        // TaskManager.Ai must match Fistix.TaskManager.AiLayer.Observability.AiTelemetryNames.ActivitySourceName / MeterName
+        const string aiTelemetryName = "TaskManager.Ai";
+
         builder.Services.AddOpenTelemetry()
             .WithMetrics(metrics =>
             {
                 metrics.AddAspNetCoreInstrumentation()
                     .AddHttpClientInstrumentation()
-                    .AddRuntimeInstrumentation();
+                    .AddRuntimeInstrumentation()
+                    .AddMeter(aiTelemetryName);
             })
             .WithTracing(tracing =>
             {
                 tracing.AddSource(builder.Environment.ApplicationName)
+                    .AddSource(aiTelemetryName)
                     .AddAspNetCoreInstrumentation(tracing =>
                         // Exclude health check requests from tracing
                         tracing.Filter = context =>

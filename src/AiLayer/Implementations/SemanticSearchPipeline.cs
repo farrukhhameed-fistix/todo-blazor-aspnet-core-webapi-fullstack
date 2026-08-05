@@ -2,6 +2,7 @@
 
 using Fistix.TaskManager.AiLayer.Abstractions;
 using Fistix.TaskManager.AiLayer.Models;
+using Fistix.TaskManager.AiLayer.Observability;
 using Fistix.TaskManager.AiLayer.Shared;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
@@ -13,54 +14,72 @@ public sealed class SemanticSearchPipeline
     private readonly IEmbeddingService _embeddingService;
     private readonly IVectorStore _vectorStore;
     private readonly AiConfiguration _aiConfig;
+    private readonly IAiTelemetry _telemetry;
     private readonly ILogger<SemanticSearchPipeline> _logger;
 
     public SemanticSearchPipeline(
         IEmbeddingService embeddingService,
         IVectorStore vectorStore,
         AiConfiguration aiConfig,
-        ILogger<SemanticSearchPipeline> logger)
+        ILogger<SemanticSearchPipeline> logger,
+        IAiTelemetry? telemetry = null)
     {
         _embeddingService = embeddingService;
         _vectorStore = vectorStore;
         _aiConfig = aiConfig;
         _logger = logger;
+        _telemetry = telemetry ?? NullAiTelemetry.Instance;
     }
 
     public async Task<SemanticSearchPipelineResult> ExecuteAsync(
         SemanticSearchPipelineRequest request,
         CancellationToken cancellationToken = default)
     {
+        using var operation = _telemetry.StartOperation(
+            AiTelemetryNames.Features.SemanticSearch,
+            model: _embeddingService.ModelName);
+
         var sw = Stopwatch.StartNew();
-        var embedding = await _embeddingService.GenerateEmbeddingAsync(
-            request.Query,
-            EmbeddingInputKind.Query,
-            cancellationToken);
-        var hits = await _vectorStore.SearchAsync(
-            embedding,
-            _embeddingService.ModelName,
-            request.OwnerExternalId,
-            request.Limit,
-            cancellationToken);
-
-        var minSimilarity = _aiConfig.Features.SemanticSearch?.MinSimilarity ?? 0.45;
-        var filtered = FilterByMinSimilarity(hits, minSimilarity);
-        sw.Stop();
-
-        _logger.LogInformation(
-            "Semantic search returned {Count}/{RawCount} hits (minSimilarity={MinSimilarity}) in {ElapsedMs}ms for model {Model}",
-            filtered.Count,
-            hits.Count,
-            minSimilarity,
-            sw.ElapsedMilliseconds,
-            _embeddingService.ModelName);
-
-        return new SemanticSearchPipelineResult
+        try
         {
-            Hits = filtered,
-            ExecutionTimeMs = sw.ElapsedMilliseconds,
-            Model = _embeddingService.ModelName
-        };
+            var embedding = await _embeddingService.GenerateEmbeddingAsync(
+                request.Query,
+                EmbeddingInputKind.Query,
+                cancellationToken);
+            var hits = await _vectorStore.SearchAsync(
+                embedding,
+                _embeddingService.ModelName,
+                request.OwnerExternalId,
+                request.Limit,
+                cancellationToken);
+
+            var minSimilarity = _aiConfig.Features.SemanticSearch?.MinSimilarity ?? 0.45;
+            var filtered = FilterByMinSimilarity(hits, minSimilarity);
+            sw.Stop();
+
+            _logger.LogInformation(
+                "Semantic search returned {Count}/{RawCount} hits (minSimilarity={MinSimilarity}) in {ElapsedMs}ms for model {Model}",
+                filtered.Count,
+                hits.Count,
+                minSimilarity,
+                sw.ElapsedMilliseconds,
+                _embeddingService.ModelName);
+
+            operation.Activity?.SetTag(AiTelemetryNames.Tags.LatencyMs, sw.ElapsedMilliseconds);
+            operation.SetOutcome(AiTelemetryNames.Outcomes.Success);
+
+            return new SemanticSearchPipelineResult
+            {
+                Hits = filtered,
+                ExecutionTimeMs = sw.ElapsedMilliseconds,
+                Model = _embeddingService.ModelName
+            };
+        }
+        catch
+        {
+            operation.SetOutcome(AiTelemetryNames.Outcomes.Error);
+            throw;
+        }
     }
 
     /// <summary>Drops nearest-neighbor hits that are too weak to be considered relevant.</summary>

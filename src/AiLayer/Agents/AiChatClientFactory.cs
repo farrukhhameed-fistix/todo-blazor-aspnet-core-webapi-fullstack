@@ -1,10 +1,11 @@
 #nullable enable
 
-using System.ClientModel;
 using Fistix.TaskManager.AiLayer.Shared;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using OpenAI;
+using System.ClientModel;
+using Fistix.TaskManager.AiLayer.Observability;
 
 namespace Fistix.TaskManager.AiLayer.Agents;
 
@@ -15,18 +16,23 @@ namespace Fistix.TaskManager.AiLayer.Agents;
 public sealed class AiChatClientFactory
 {
     private readonly AiConfiguration _aiConfig;
+    private readonly IAiTelemetry _telemetry;
     private readonly ILogger<AiChatClientFactory> _logger;
 
-    public AiChatClientFactory(AiConfiguration aiConfig, ILogger<AiChatClientFactory> logger)
+    public AiChatClientFactory(
+        AiConfiguration aiConfig,
+        ILogger<AiChatClientFactory> logger,
+        IAiTelemetry? telemetry = null)
     {
         _aiConfig = aiConfig;
         _logger = logger;
+        _telemetry = telemetry ?? NullAiTelemetry.Instance;
     }
 
     public IChatClient CreateChatClient()
     {
         var provider = (_aiConfig.Provider ?? "openai").Trim().ToLowerInvariant();
-        return provider switch
+        var (inner, model) = provider switch
         {
             "google" => CreateGoogleOpenAiCompatibleClient(),
             "azureopenai" => CreateAzureOpenAiClient(),
@@ -35,17 +41,19 @@ public sealed class AiChatClientFactory
                 "Microsoft Agent Framework sprint agent does not support Claude directly yet. Use Provider google, openai, azureopenai, or ollama."),
             _ => CreateOpenAiClient()
         };
+
+        return new ObservingChatClient(inner, _telemetry, _aiConfig, model);
     }
 
-    private IChatClient CreateOpenAiClient()
+    private (IChatClient Client, string Model) CreateOpenAiClient()
     {
         var apiKey = ResolveApiKey(_aiConfig.OpenAI.ApiKey);
         var model = ResolveModelOverride(_aiConfig.OpenAI.Model, "gpt-4o-mini");
         _logger.LogInformation("MAF chat client using OpenAI model {Model}", model);
-        return new OpenAIClient(apiKey).GetChatClient(model).AsIChatClient();
+        return (new OpenAIClient(apiKey).GetChatClient(model).AsIChatClient(), model);
     }
 
-    private IChatClient CreateAzureOpenAiClient()
+    private (IChatClient Client, string Model) CreateAzureOpenAiClient()
     {
         var apiKey = ResolveApiKey(_aiConfig.AzureOpenAI.ApiKey);
         var endpoint = _aiConfig.AzureOpenAI.Endpoint?.TrimEnd('/');
@@ -57,10 +65,10 @@ public sealed class AiChatClientFactory
         var model = ResolveModelOverride(_aiConfig.AzureOpenAI.Model, "gpt-4o");
         var options = new OpenAIClientOptions { Endpoint = new Uri($"{endpoint}/openai/v1") };
         _logger.LogInformation("MAF chat client using Azure OpenAI deployment {Model}", model);
-        return new OpenAIClient(new ApiKeyCredential(apiKey), options).GetChatClient(model).AsIChatClient();
+        return (new OpenAIClient(new ApiKeyCredential(apiKey), options).GetChatClient(model).AsIChatClient(), model);
     }
 
-    private IChatClient CreateOllamaClient()
+    private (IChatClient Client, string Model) CreateOllamaClient()
     {
         var endpoint = string.IsNullOrWhiteSpace(_aiConfig.Ollama.Endpoint)
             ? "http://localhost:11434"
@@ -73,10 +81,10 @@ public sealed class AiChatClientFactory
         var model = ResolveModelOverride(_aiConfig.Ollama.Model, "mistral:7b");
         var options = new OpenAIClientOptions { Endpoint = new Uri(endpoint) };
         _logger.LogInformation("MAF chat client using Ollama model {Model} at {Endpoint}", model, endpoint);
-        return new OpenAIClient(new ApiKeyCredential("ollama"), options).GetChatClient(model).AsIChatClient();
+        return (new OpenAIClient(new ApiKeyCredential("ollama"), options).GetChatClient(model).AsIChatClient(), model);
     }
 
-    private IChatClient CreateGoogleOpenAiCompatibleClient()
+    private (IChatClient Client, string Model) CreateGoogleOpenAiCompatibleClient()
     {
         var apiKey = ResolveApiKey(_aiConfig.GoogleAI.ApiKey);
         var model = ResolveGoogleMafModel();
@@ -85,7 +93,7 @@ public sealed class AiChatClientFactory
             Endpoint = new Uri("https://generativelanguage.googleapis.com/v1beta/openai/")
         };
         _logger.LogInformation("MAF chat client using Google OpenAI-compatible model {Model}", model);
-        return new OpenAIClient(new ApiKeyCredential(apiKey), options).GetChatClient(model).AsIChatClient();
+        return (new OpenAIClient(new ApiKeyCredential(apiKey), options).GetChatClient(model).AsIChatClient(), model);
     }
 
     /// <summary>

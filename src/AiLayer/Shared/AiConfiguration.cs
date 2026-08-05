@@ -15,6 +15,23 @@ public class AiConfiguration
     public EmbeddingSettings Embedding { get; set; } = new();
     public AgentsSettings Agents { get; set; } = new();
     public AiFeaturesConfiguration Features { get; set; } = new();
+    public AiObservabilitySettings Observability { get; set; } = new();
+}
+
+/// <summary>
+/// OpenTelemetry GenAI observability controls. Payloads are redacted unless preview is enabled.
+/// </summary>
+public class AiObservabilitySettings
+{
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>When true, truncated prompt/response previews may be attached to spans/logs.</summary>
+    public bool CapturePayloadPreview { get; set; } = false;
+
+    public int PayloadPreviewMaxChars { get; set; } = 256;
+
+    /// <summary>Record provider token usage when available (often missing for Ollama).</summary>
+    public bool RecordTokenUsage { get; set; } = true;
 }
 
 /// <summary>

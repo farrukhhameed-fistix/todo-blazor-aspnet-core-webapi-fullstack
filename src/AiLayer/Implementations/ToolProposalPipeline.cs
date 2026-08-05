@@ -2,6 +2,7 @@
 
 using Fistix.TaskManager.AiLayer.Abstractions;
 using Fistix.TaskManager.AiLayer.Models;
+using Fistix.TaskManager.AiLayer.Observability;
 using Fistix.TaskManager.AiLayer.Shared;
 using Fistix.TaskManager.AiLayer.Tools;
 using Microsoft.Extensions.Logging;
@@ -21,71 +22,87 @@ public sealed class ToolProposalPipeline
     };
 
     private readonly ILlmProviderService _llm;
+    private readonly IAiTelemetry _telemetry;
     private readonly ILogger<ToolProposalPipeline> _logger;
 
-    public ToolProposalPipeline(ILlmProviderService llm, ILogger<ToolProposalPipeline> logger)
+    public ToolProposalPipeline(
+        ILlmProviderService llm,
+        ILogger<ToolProposalPipeline> logger,
+        IAiTelemetry? telemetry = null)
     {
         _llm = llm;
         _logger = logger;
+        _telemetry = telemetry ?? NullAiTelemetry.Instance;
     }
 
     public async Task<ToolProposalPipelineResult> ExecuteAsync(
         ToolProposalPipelineRequest request,
         CancellationToken cancellationToken = default)
     {
-        var sanitizedPrompt = PromptInputSanitizer.SanitizeAndTruncate(request.Prompt, 2000);
+        using var operation = _telemetry.StartOperation(AiTelemetryNames.Features.ProposeTools);
 
-        var systemPrompt = $$"""
-            You are a task-management function-calling assistant.
-            Given the user request, propose zero or more tool calls. Do NOT execute anything.
-            {{TodoToolDefinitions.BuildCatalogForPrompt()}}
-
-            Respond with ONLY valid JSON in this shape:
-            {
-              "explanation": "short human-readable summary of what you intend to do",
-              "calls": [
-                {
-                  "toolName": "create_todo",
-                  "arguments": { "title": "...", "description": "...", "priority": "High" }
-                }
-              ]
-            }
-
-            Rules:
-            - Use only the listed tool names.
-            - Prefer the fewest calls that satisfy the request.
-            - If the request cannot be mapped to tools, return an empty calls array and explain why.
-            - For ids use GUID strings when the user provided them.
-            """;
-
-        var fullPrompt = $"""
-            {systemPrompt}
-
-            User request:
-            {sanitizedPrompt}
-            """;
-
-        _logger.LogInformation("Proposing AI tool calls for prompt length {Length}", sanitizedPrompt.Length);
-        var raw = await _llm.GetCompletionAsync(fullPrompt, cancellationToken);
-        var parsed = ParseResponse(raw);
-
-        var allowedCalls = parsed.Calls
-            .Where(c => TodoToolDefinitions.IsAllowed(c.ToolName))
-            .Select(c => new ProposedToolCall
-            {
-                ToolName = TodoToolDefinitions.NormalizeName(c.ToolName),
-                Arguments = c.Arguments ?? new Dictionary<string, JsonElement>()
-            })
-            .ToList();
-
-        return new ToolProposalPipelineResult
+        try
         {
-            Explanation = string.IsNullOrWhiteSpace(parsed.Explanation)
-                ? "Proposed tool calls based on your request."
-                : parsed.Explanation.Trim(),
-            ProposedCalls = allowedCalls,
-            Model = "function-calling"
-        };
+            var sanitizedPrompt = PromptInputSanitizer.SanitizeAndTruncate(request.Prompt, 2000);
+
+            var systemPrompt = $$"""
+                You are a task-management function-calling assistant.
+                Given the user request, propose zero or more tool calls. Do NOT execute anything.
+                {{TodoToolDefinitions.BuildCatalogForPrompt()}}
+
+                Respond with ONLY valid JSON in this shape:
+                {
+                  "explanation": "short human-readable summary of what you intend to do",
+                  "calls": [
+                    {
+                      "toolName": "create_todo",
+                      "arguments": { "title": "...", "description": "...", "priority": "High" }
+                    }
+                  ]
+                }
+
+                Rules:
+                - Use only the listed tool names.
+                - Prefer the fewest calls that satisfy the request.
+                - If the request cannot be mapped to tools, return an empty calls array and explain why.
+                - For ids use GUID strings when the user provided them.
+                """;
+
+            var fullPrompt = $"""
+                {systemPrompt}
+
+                User request:
+                {sanitizedPrompt}
+                """;
+
+            _logger.LogInformation("Proposing AI tool calls for prompt length {Length}", sanitizedPrompt.Length);
+            var raw = await _llm.GetCompletionAsync(fullPrompt, cancellationToken);
+            var parsed = ParseResponse(raw);
+
+            var allowedCalls = parsed.Calls
+                .Where(c => TodoToolDefinitions.IsAllowed(c.ToolName))
+                .Select(c => new ProposedToolCall
+                {
+                    ToolName = TodoToolDefinitions.NormalizeName(c.ToolName),
+                    Arguments = c.Arguments ?? new Dictionary<string, JsonElement>()
+                })
+                .ToList();
+
+            operation.SetOutcome(AiTelemetryNames.Outcomes.Success);
+            return new ToolProposalPipelineResult
+            {
+                Explanation = string.IsNullOrWhiteSpace(parsed.Explanation)
+                    ? "Proposed tool calls based on your request."
+                    : parsed.Explanation.Trim(),
+                ProposedCalls = allowedCalls,
+                Model = "function-calling"
+            };
+        }
+        catch
+        {
+            operation.SetOutcome(AiTelemetryNames.Outcomes.Error);
+            throw;
+        }
     }
 
     private LlmToolProposalResponse ParseResponse(string raw)

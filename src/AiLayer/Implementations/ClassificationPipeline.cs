@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using System.Net;
 using System.Text.Json;
 using Fistix.TaskManager.AiLayer.Abstractions;
 using Fistix.TaskManager.AiLayer.Models;
+using Fistix.TaskManager.AiLayer.Observability;
 using Fistix.TaskManager.AiLayer.Shared;
 using Microsoft.Extensions.Logging;
 using Microsoft.SemanticKernel;
@@ -17,6 +19,7 @@ public class ClassificationPipeline : IAiPipeline
     private readonly SemanticKernelOrchestrator _orchestrator;
     private readonly AiConfiguration _aiConfig;
     private readonly ClassificationConfiguration _classificationConfig;
+    private readonly IAiTelemetry _telemetry;
     private readonly ILogger<ClassificationPipeline> _logger;
 
     private const string ClassificationPrompt = @"
@@ -51,13 +54,15 @@ Return JSON exactly in this shape:
         SemanticKernelOrchestrator orchestrator,
         ILogger<ClassificationPipeline> logger,
         AiConfiguration? aiConfig = null,
-        ClassificationConfiguration? classificationConfig = null)
+        ClassificationConfiguration? classificationConfig = null,
+        IAiTelemetry? telemetry = null)
     {
         _kernel = kernel ?? throw new ArgumentNullException(nameof(kernel));
         _orchestrator = orchestrator ?? throw new ArgumentNullException(nameof(orchestrator));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _aiConfig = aiConfig ?? new AiConfiguration();
         _classificationConfig = classificationConfig ?? _aiConfig.Features.Classification ?? new ClassificationConfiguration();
+        _telemetry = telemetry ?? NullAiTelemetry.Instance;
     }
 
     public async Task<TResponse> ExecuteAsync<TRequest, TResponse>(TRequest request)
@@ -68,6 +73,11 @@ Return JSON exactly in this shape:
         {
             throw new ArgumentException($"Request must be of type {nameof(ClassificationRequest)}", nameof(request));
         }
+
+        using var operation = _telemetry.StartOperation(
+            AiTelemetryNames.Features.Classify,
+            provider: _aiConfig.Provider,
+            todoExternalId: classificationRequest.TodoExternalId);
 
         _logger.LogInformation("Starting classification for todo {TodoExternalId}", classificationRequest.TodoExternalId);
 
@@ -112,6 +122,9 @@ Return JSON exactly in this shape:
                         modelLabel,
                         priority,
                         confidence);
+
+                    operation.Activity?.SetTag(AiTelemetryNames.Tags.RequestModel, modelLabel);
+                    operation.SetOutcome(AiTelemetryNames.Outcomes.Success);
 
                     var response = new ClassificationResponse
                     {
@@ -158,6 +171,10 @@ Return JSON exactly in this shape:
                 }
             }
         }
+
+        operation.SetOutcome(lastException is TimeoutException
+            ? AiTelemetryNames.Outcomes.Timeout
+            : AiTelemetryNames.Outcomes.Error);
 
         _logger.LogError(lastException,
             "Error during classification for todo {TodoExternalId} after all attempts. RootCause: {RootCause}",
@@ -259,36 +276,68 @@ Return JSON exactly in this shape:
         CancellationToken cancellationToken)
     {
         var function = kernel.CreateFunctionFromPrompt(ClassificationPrompt);
+        var titleLen = arguments["title"]?.ToString()?.Length ?? 0;
+        var descriptionLen = arguments["description"]?.ToString()?.Length ?? 0;
+        var inputChars = titleLen + descriptionLen;
 
         _logger.LogInformation(
             "LLM classify request -> Provider: {Provider}, Model: {Model}, TimeoutMs: {TimeoutMs}, TitleLength: {TitleLength}, DescriptionLength: {DescriptionLength}",
             _aiConfig.Provider,
             modelLabel,
             _classificationConfig.RequestTimeoutMs,
-            arguments["title"]?.ToString()?.Length ?? 0,
-            arguments["description"]?.ToString()?.Length ?? 0);
+            titleLen,
+            descriptionLen);
+
+        var activity = _telemetry.StartLlmCall(
+            AiTelemetryNames.Features.Classify,
+            modelLabel,
+            _aiConfig.Provider,
+            inputChars);
+        var sw = Stopwatch.StartNew();
 
         try
         {
             var result = await kernel.InvokeAsync(function, arguments, cancellationToken);
             var rawResponse = result.GetValue<string>()?.Trim() ?? string.Empty;
+            sw.Stop();
 
             _logger.LogInformation(
-                "LLM classify response <- Provider: {Provider}, Model: {Model}, ResponseLength: {ResponseLength}, RawResponse: {RawResponse}",
+                "LLM classify response <- Provider: {Provider}, Model: {Model}, ResponseLength: {ResponseLength}",
                 _aiConfig.Provider,
                 modelLabel,
-                rawResponse.Length,
-                rawResponse);
+                rawResponse.Length);
+
+            if (_aiConfig.Observability.CapturePayloadPreview)
+            {
+                _logger.LogDebug(
+                    "LLM classify response preview <- Model: {Model}, Preview: {Preview}",
+                    modelLabel,
+                    AiPayloadRedactor.Preview(rawResponse, _aiConfig.Observability));
+            }
 
             if (string.IsNullOrWhiteSpace(rawResponse))
             {
+                _telemetry.CompleteLlmCall(
+                    activity,
+                    sw.ElapsedMilliseconds,
+                    AiTelemetryNames.Outcomes.ParseError,
+                    outputChars: 0);
                 throw new InvalidOperationException("AI returned an empty classification response.");
             }
+
+            _telemetry.CompleteLlmCall(
+                activity,
+                sw.ElapsedMilliseconds,
+                AiTelemetryNames.Outcomes.Success,
+                rawResponse.Length,
+                rawResponse);
 
             return rawResponse;
         }
         catch (HttpOperationException httpEx)
         {
+            sw.Stop();
+            _telemetry.CompleteLlmCall(activity, sw.ElapsedMilliseconds, AiTelemetryNames.Outcomes.Error);
             _logger.LogWarning(
                 httpEx,
                 "LLM classify HTTP error <- Provider: {Provider}, Model: {Model}, Status: {StatusCode}, RootCause: {RootCause}, ResponseContent: {ResponseContent}",
@@ -302,6 +351,8 @@ Return JSON exactly in this shape:
         }
         catch (Exception ex) when (IsCanceledByTimeout(ex, cancellationToken))
         {
+            sw.Stop();
+            _telemetry.CompleteLlmCall(activity, sw.ElapsedMilliseconds, AiTelemetryNames.Outcomes.Timeout);
             // CTS from RequestTimeoutMs fired — no raw LLM body is available.
             _logger.LogWarning(
                 ex,
@@ -315,8 +366,10 @@ Return JSON exactly in this shape:
                 $"Classification timed out after {_classificationConfig.RequestTimeoutMs}ms calling {_aiConfig.Provider}/{modelLabel}.",
                 ex);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not InvalidOperationException)
         {
+            sw.Stop();
+            _telemetry.CompleteLlmCall(activity, sw.ElapsedMilliseconds, AiTelemetryNames.Outcomes.Error);
             _logger.LogWarning(
                 ex,
                 "LLM classify error <- Provider: {Provider}, Model: {Model}, RootCause: {RootCause}",

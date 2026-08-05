@@ -2,6 +2,7 @@
 
 using Fistix.TaskManager.AiLayer.Abstractions;
 using Fistix.TaskManager.AiLayer.Models;
+using Fistix.TaskManager.AiLayer.Observability;
 using Fistix.TaskManager.AiLayer.Shared;
 using Fistix.TaskManager.AiLayer.Tools;
 using Fistix.TaskManager.Core.Abstractions.Repositories;
@@ -13,6 +14,7 @@ using MediatR;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -34,6 +36,7 @@ public sealed class ToolExecutor : IToolExecutor
     private readonly ITodoTaskRepository _todoTaskRepository;
     private readonly IToolExecutionLogRepository _toolExecutionLogRepository;
     private readonly ICurrentUserService _currentUserService;
+    private readonly IAiTelemetry _telemetry;
     private readonly ILogger<ToolExecutor> _logger;
 
     public ToolExecutor(
@@ -41,25 +44,30 @@ public sealed class ToolExecutor : IToolExecutor
         ITodoTaskRepository todoTaskRepository,
         IToolExecutionLogRepository toolExecutionLogRepository,
         ICurrentUserService currentUserService,
-        ILogger<ToolExecutor> logger)
+        ILogger<ToolExecutor> logger,
+        IAiTelemetry? telemetry = null)
     {
         _mediator = mediator;
         _todoTaskRepository = todoTaskRepository;
         _toolExecutionLogRepository = toolExecutionLogRepository;
         _currentUserService = currentUserService;
         _logger = logger;
+        _telemetry = telemetry ?? NullAiTelemetry.Instance;
     }
 
     public async Task<IReadOnlyList<ToolExecutionOutcome>> ExecuteAsync(
         IReadOnlyList<ProposedToolCall> calls,
         CancellationToken cancellationToken = default)
     {
+        using var operation = _telemetry.StartOperation(AiTelemetryNames.Features.ExecuteTools);
         var userId = TodoAccessGuard.RequireCurrentUserId(_currentUserService);
         var outcomes = new List<ToolExecutionOutcome>();
 
         foreach (var call in calls)
         {
             var parametersJson = JsonSerializer.Serialize(call.Arguments, JsonOptions);
+            var toolActivity = _telemetry.StartToolCall(call.ToolName, parametersJson);
+            var sw = Stopwatch.StartNew();
             ToolExecutionOutcome outcome;
 
             try
@@ -81,10 +89,13 @@ public sealed class ToolExecutor : IToolExecutor
                     _ => throw new InvalidOperationException($"Tool '{toolName}' is not implemented.")
                 };
 
+                sw.Stop();
+                _telemetry.CompleteToolCall(toolActivity, sw.ElapsedMilliseconds, success: true);
                 await LogAsync(userId, toolName, parametersJson, outcome, cancellationToken);
             }
             catch (Exception ex)
             {
+                sw.Stop();
                 _logger.LogWarning(ex, "Tool execution failed for {ToolName}", call.ToolName);
                 outcome = new ToolExecutionOutcome
                 {
@@ -92,12 +103,16 @@ public sealed class ToolExecutor : IToolExecutor
                     Success = false,
                     Message = ex.Message
                 };
+                _telemetry.CompleteToolCall(toolActivity, sw.ElapsedMilliseconds, success: false, error: ex.Message);
                 await LogAsync(userId, call.ToolName, parametersJson, outcome, cancellationToken);
             }
 
             outcomes.Add(outcome);
         }
 
+        operation.SetOutcome(outcomes.All(o => o.Success)
+            ? AiTelemetryNames.Outcomes.Success
+            : AiTelemetryNames.Outcomes.Error);
         return outcomes;
     }
 
