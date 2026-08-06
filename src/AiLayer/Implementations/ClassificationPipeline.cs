@@ -81,12 +81,15 @@ Return JSON exactly in this shape:
 
         _logger.LogInformation("Starting classification for todo {TodoExternalId}", classificationRequest.TodoExternalId);
 
+        var sanitizedTitle = PromptInputSanitizer.SanitizeAndTruncate(
+            classificationRequest.Title, LlmInputLimits.TitleMaxLength);
+        var sanitizedDescription = PromptInputSanitizer.SanitizeAndTruncate(
+            classificationRequest.Description, LlmInputLimits.DescriptionMaxLength);
+
         var arguments = new KernelArguments
         {
-            ["title"] = PromptInputSanitizer.SanitizeAndTruncate(
-                classificationRequest.Title, LlmInputLimits.TitleMaxLength),
-            ["description"] = PromptInputSanitizer.SanitizeAndTruncate(
-                classificationRequest.Description, LlmInputLimits.DescriptionMaxLength),
+            ["title"] = sanitizedTitle,
+            ["description"] = sanitizedDescription,
             ["dueDate"] = classificationRequest.DueDate?.ToString("yyyy-MM-dd") ?? "not set"
         };
 
@@ -112,8 +115,8 @@ Return JSON exactly in this shape:
                         parsed.Priority,
                         parsed.Confidence,
                         parsed.Reason,
-                        classificationRequest.Title,
-                        classificationRequest.Description,
+                        sanitizedTitle,
+                        sanitizedDescription,
                         classificationRequest.DueDate);
 
                     _logger.LogInformation(
@@ -124,6 +127,7 @@ Return JSON exactly in this shape:
                         confidence);
 
                     operation.Activity?.SetTag(AiTelemetryNames.Tags.RequestModel, modelLabel);
+                    operation.Activity?.SetTag(AiTelemetryNames.Tags.PromptVersion, AiPromptVersions.Classify);
                     operation.SetOutcome(AiTelemetryNames.Outcomes.Success);
 
                     var response = new ClassificationResponse
@@ -189,22 +193,7 @@ Return JSON exactly in this shape:
         try
         {
             var json = ExtractJson(rawResponse);
-            using var document = JsonDocument.Parse(json);
-            var root = document.RootElement;
-
-            var priority = root.TryGetProperty("priority", out var priorityElement)
-                ? priorityElement.GetString() ?? "MEDIUM"
-                : "MEDIUM";
-
-            var confidence = root.TryGetProperty("confidence", out var confidenceElement) && confidenceElement.TryGetSingle(out var value)
-                ? value
-                : 0.5f;
-
-            var reason = root.TryGetProperty("reason", out var reasonElement)
-                ? reasonElement.GetString()
-                : null;
-
-            return (ClassificationGuardrails.NormalizePriority(priority), confidence, reason);
+            return LlmOutputValidator.ValidateClassificationJson(json);
         }
         catch (Exception ex)
         {
@@ -215,6 +204,9 @@ Return JSON exactly in this shape:
                 modelLabel,
                 GetRootCause(ex),
                 rawResponse);
+            _telemetry.RecordQualityEvent(
+                AiTelemetryNames.Features.Classify,
+                AiTelemetryNames.QualityEvents.ValidationFailed);
             throw new InvalidOperationException(
                 $"AI returned an invalid classification response from {_aiConfig.Provider}/{modelLabel}.",
                 ex);

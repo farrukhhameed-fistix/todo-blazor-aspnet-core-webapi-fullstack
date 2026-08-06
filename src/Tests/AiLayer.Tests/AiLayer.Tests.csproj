@@ -24,4 +24,10 @@
     <ProjectReference Include="..\..\ViewModel\ViewModel.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="..\..\..\samples\ai-eval-todos.csv" Link="samples\ai-eval-todos.csv" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\samples\ai-eval-rag.json" Link="samples\ai-eval-rag.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\..\samples\ai-eval-tool-proposals.json" Link="samples\ai-eval-tool-proposals.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

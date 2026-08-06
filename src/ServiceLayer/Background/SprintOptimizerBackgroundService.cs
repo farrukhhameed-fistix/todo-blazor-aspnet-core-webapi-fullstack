@@ -119,11 +119,14 @@ public sealed class SprintOptimizerBackgroundService : BackgroundService
         await notifier.NotifyAsync(SprintOptimizerJobMapper.ToDto(job), cancellationToken);
 
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var jobTimeoutSeconds = Math.Max(30, _aiConfig.Agents?.JobTimeoutSeconds ?? 240);
+        linkedCts.CancelAfter(TimeSpan.FromSeconds(jobTimeoutSeconds));
         var heartbeatTask = HeartbeatLoopAsync(job.ExternalId, linkedCts.Token);
         using var operation = telemetry.StartOperation(
             AiTelemetryNames.Features.SprintOptimizer,
             provider: _aiConfig.Provider,
             jobExternalId: job.ExternalId);
+        operation.Activity?.SetTag(AiTelemetryNames.Tags.PromptVersion, AiPromptVersions.SprintOptimizer);
 
         try
         {
@@ -202,10 +205,14 @@ public sealed class SprintOptimizerBackgroundService : BackgroundService
         }
         catch (OperationCanceledException)
         {
-            operation.SetOutcome(AiTelemetryNames.Outcomes.Cancelled);
+            // Job-level CancelAfter or user cancel via linked CTS.
+            operation.SetOutcome(AiTelemetryNames.Outcomes.BudgetExceeded);
+            telemetry.RecordQualityEvent(
+                AiTelemetryNames.Features.SprintOptimizer,
+                AiTelemetryNames.QualityEvents.BudgetExceeded);
             var cancelled = await jobs.GetByExternalIdAsync(job.ExternalId, CancellationToken.None) ?? job;
             cancelled.Status = AiBatchJobStatus.Cancelled;
-            cancelled.StatusMessage = "Cancelled.";
+            cancelled.StatusMessage = "Cancelled or timed out (job budget).";
             cancelled.CompletedAt = DateTime.UtcNow;
             await jobs.UpdateAsync(cancelled, CancellationToken.None);
             await notifier.NotifyAsync(SprintOptimizerJobMapper.ToDto(cancelled), CancellationToken.None);

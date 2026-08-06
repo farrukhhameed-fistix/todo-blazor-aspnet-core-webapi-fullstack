@@ -73,12 +73,24 @@ SUMMARY:";
 
         _logger.LogInformation("Starting summarization for todo {TodoExternalId}", summarizationRequest.TodoExternalId);
 
+        var sanitizedTitle = PromptInputSanitizer.SanitizeAndTruncate(
+            summarizationRequest.Title, LlmInputLimits.TitleMaxLength);
+        var sanitizedDescription = PromptInputSanitizer.SanitizeAndTruncate(
+            summarizationRequest.Description, LlmInputLimits.DescriptionMaxLength);
+
+        if (string.IsNullOrWhiteSpace(sanitizedTitle) && string.IsNullOrWhiteSpace(sanitizedDescription))
+        {
+            operation.SetOutcome(AiTelemetryNames.Outcomes.ValidationFailed);
+            _telemetry.RecordQualityEvent(
+                AiTelemetryNames.Features.Summarize,
+                AiTelemetryNames.QualityEvents.ValidationFailed);
+            throw new InvalidOperationException("Cannot summarize a task with empty title and description.");
+        }
+
         var arguments = new KernelArguments
         {
-            ["title"] = PromptInputSanitizer.SanitizeAndTruncate(
-                summarizationRequest.Title, LlmInputLimits.TitleMaxLength),
-            ["description"] = PromptInputSanitizer.SanitizeAndTruncate(
-                summarizationRequest.Description, LlmInputLimits.DescriptionMaxLength)
+            ["title"] = sanitizedTitle,
+            ["description"] = sanitizedDescription
         };
 
         Exception? lastException = null;
@@ -112,6 +124,7 @@ SUMMARY:";
                     summary.Length);
 
                 operation.Activity?.SetTag(AiTelemetryNames.Tags.RequestModel, modelLabel);
+                operation.Activity?.SetTag(AiTelemetryNames.Tags.PromptVersion, AiPromptVersions.Summarize);
                 operation.SetOutcome(AiTelemetryNames.Outcomes.Success);
 
                 var response = new SummarizationResponse

@@ -1,4 +1,5 @@
 using AutoMapper;
+using Fistix.TaskManager.AiLayer.Observability;
 using Fistix.TaskManager.AiLayer.Shared;
 using Fistix.TaskManager.Core;
 using Fistix.TaskManager.Core.Abstractions.Repositories;
@@ -22,6 +23,7 @@ public class UpdateTodoTaskCommandHandler : IRequestHandler<UpdateTodoTaskComman
     private readonly ICurrentUserService _currentUserService;
     private readonly IEmbeddingQueue _embeddingQueue;
     private readonly AiConfiguration _aiConfig;
+    private readonly IAiTelemetry _telemetry;
     private readonly ILogger<UpdateTodoTaskCommandHandler> _logger;
 
     public UpdateTodoTaskCommandHandler(
@@ -31,7 +33,8 @@ public class UpdateTodoTaskCommandHandler : IRequestHandler<UpdateTodoTaskComman
         ICurrentUserService currentUserService,
         IEmbeddingQueue embeddingQueue,
         AiConfiguration aiConfig,
-        ILogger<UpdateTodoTaskCommandHandler> logger)
+        ILogger<UpdateTodoTaskCommandHandler> logger,
+        IAiTelemetry? telemetry = null)
     {
         _mapper = mapper;
         _todoTaskRepository = todoTaskRepository;
@@ -40,6 +43,7 @@ public class UpdateTodoTaskCommandHandler : IRequestHandler<UpdateTodoTaskComman
         _embeddingQueue = embeddingQueue;
         _aiConfig = aiConfig;
         _logger = logger;
+        _telemetry = telemetry ?? NullAiTelemetry.Instance;
     }
 
     public async Task<UpdateTodoTaskCommandResult> Handle(UpdateTodoTaskCommand command, CancellationToken cancellationToken)
@@ -62,6 +66,8 @@ public class UpdateTodoTaskCommandHandler : IRequestHandler<UpdateTodoTaskComman
                 todoTask.Priority,
                 metadata.AiPriority);
             await _todoAiMetadataRepository.SetWasOverriddenAsync(todoTask.Id, wasOverridden, cancellationToken);
+            var band = AiTelemetryNames.ConfidenceBands.FromConfidence(metadata.ConfidenceScore ?? 0f);
+            _telemetry.RecordOverrideDecision(band, wasOverridden);
         }
 
         if (_aiConfig.Features.EnableEmbeddings)

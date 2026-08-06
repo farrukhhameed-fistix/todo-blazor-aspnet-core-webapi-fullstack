@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Fistix.TaskManager.AiLayer.Observability;
+using Fistix.TaskManager.AiLayer.Shared;
 using Fistix.TaskManager.Core.Abstractions.Repositories;
 using Fistix.TaskManager.Core.DomainModel.Aggregates;
 using Fistix.TaskManager.ViewModel.Commands.Todos;
@@ -30,6 +31,8 @@ public sealed class SprintPlanningTools
     private int _durationDays = 14;
     private string _sprintName = string.Empty;
     private IReadOnlyList<TodoTask> _candidates = [];
+    private int _maxToolInvocations = 12;
+    private int _toolInvocationCount;
 
     public SprintPlanningTools(
         ITodoTaskRepository todoTaskRepository,
@@ -48,6 +51,8 @@ public sealed class SprintPlanningTools
     public List<TodoTask> SelectedTodos { get; } = [];
     public string LastProposeReasoning { get; private set; } = string.Empty;
     public List<AgentStepDto> Steps { get; } = [];
+    public bool BudgetExceeded { get; private set; }
+    public int ToolInvocationCount => _toolInvocationCount;
 
     /// <summary>When true, tool steps are labeled Analyst vs Planner; otherwise SprintAgent.</summary>
     public bool UseMultiAgentLabels { get; private set; }
@@ -67,11 +72,13 @@ public sealed class SprintPlanningTools
         int durationDays,
         string? name,
         bool multiAgent,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int maxToolInvocations = 12)
     {
         _ownerId = ownerId;
         _maxTasks = Math.Clamp(maxTasks, 1, 50);
         _durationDays = Math.Clamp(durationDays, 1, 90);
+        _maxToolInvocations = Math.Max(1, maxToolInvocations);
         UseMultiAgentLabels = multiAgent;
         var start = DateTime.UtcNow.Date;
         _sprintName = string.IsNullOrWhiteSpace(name)
@@ -85,6 +92,8 @@ public sealed class SprintPlanningTools
         SelectedTodos.Clear();
         LastProposeReasoning = string.Empty;
         Steps.Clear();
+        BudgetExceeded = false;
+        _toolInvocationCount = 0;
 
         var todos = await _todoTaskRepository.GetByOwner(ownerId, cancellationToken);
         _candidates = todos
@@ -173,9 +182,8 @@ public sealed class SprintPlanningTools
 
         SelectedTodos.Clear();
         SelectedTodos.AddRange(selected);
-        LastProposeReasoning = string.IsNullOrWhiteSpace(reasoning)
-            ? "Proposed via agent tool."
-            : reasoning.Trim();
+        LastProposeReasoning = LlmOutputValidator.ValidateAgentText(
+            string.IsNullOrWhiteSpace(reasoning) ? "Proposed via agent tool." : reasoning);
 
         RecordStep(
             "Planner",
@@ -256,6 +264,17 @@ public sealed class SprintPlanningTools
 
     private void RecordStep(string defaultRole, string toolName, string summary)
     {
+        _toolInvocationCount++;
+        if (_toolInvocationCount > _maxToolInvocations)
+        {
+            BudgetExceeded = true;
+            _telemetry.RecordQualityEvent(
+                AiTelemetryNames.Features.SprintOptimizer,
+                AiTelemetryNames.QualityEvents.BudgetExceeded);
+            throw new InvalidOperationException(
+                $"Sprint agent tool budget exceeded ({_maxToolInvocations} invocations).");
+        }
+
         var agentName = UseMultiAgentLabels
             ? (string.IsNullOrWhiteSpace(_activeAgentRole) ? defaultRole : _activeAgentRole)
             : "SprintAgent";

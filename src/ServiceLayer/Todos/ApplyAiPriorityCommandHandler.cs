@@ -1,4 +1,5 @@
 using AutoMapper;
+using Fistix.TaskManager.AiLayer.Observability;
 using Fistix.TaskManager.AiLayer.Shared;
 using Fistix.TaskManager.Core.Abstractions.Repositories;
 using Fistix.TaskManager.Core.Abstractions.Services;
@@ -21,19 +22,22 @@ public class ApplyAiPriorityCommandHandler : IRequestHandler<ApplyAiPriorityComm
     private readonly ICurrentUserService _currentUserService;
     private readonly IMapper _mapper;
     private readonly AiConfiguration _aiConfig;
+    private readonly IAiTelemetry _telemetry;
 
     public ApplyAiPriorityCommandHandler(
         ITodoTaskRepository todoTaskRepository,
         ITodoAiMetadataRepository todoAiMetadataRepository,
         ICurrentUserService currentUserService,
         IMapper mapper,
-        AiConfiguration aiConfig)
+        AiConfiguration aiConfig,
+        IAiTelemetry? telemetry = null)
     {
         _todoTaskRepository = todoTaskRepository;
         _todoAiMetadataRepository = todoAiMetadataRepository;
         _currentUserService = currentUserService;
         _mapper = mapper;
         _aiConfig = aiConfig;
+        _telemetry = telemetry ?? NullAiTelemetry.Instance;
     }
 
     public async Task<ApplyAiPriorityCommandResult> Handle(ApplyAiPriorityCommand command, CancellationToken cancellationToken)
@@ -57,6 +61,9 @@ public class ApplyAiPriorityCommandHandler : IRequestHandler<ApplyAiPriorityComm
         todo.Priority = ClassificationGuardrails.ToTaskPriority(metadata.AiPriority);
         await _todoTaskRepository.Update(todo, cancellationToken);
         await _todoAiMetadataRepository.SetWasOverriddenAsync(todo.Id, wasOverridden: false, cancellationToken);
+        _telemetry.RecordOverrideDecision(
+            AiTelemetryNames.ConfidenceBands.FromConfidence(metadata.ConfidenceScore ?? 0f),
+            wasOverridden: false);
 
         todo = await _todoTaskRepository.Get(command.TodoExternalId, cancellationToken);
 

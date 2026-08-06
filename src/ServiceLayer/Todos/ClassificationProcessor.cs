@@ -1,5 +1,6 @@
 using Fistix.TaskManager.AiLayer.Implementations;
 using Fistix.TaskManager.AiLayer.Models;
+using Fistix.TaskManager.AiLayer.Observability;
 using Fistix.TaskManager.AiLayer.Shared;
 using Fistix.TaskManager.Core.Abstractions.Repositories;
 using Fistix.TaskManager.Core.DomainModel.Constants;
@@ -24,6 +25,7 @@ public class ClassificationProcessor : IClassificationProcessor
     private readonly ITodoAiMetadataRepository _todoAiMetadataRepository;
     private readonly ClassificationPipeline _classificationPipeline;
     private readonly IClassificationNotifier _classificationNotifier;
+    private readonly IAiTelemetry _telemetry;
     private readonly ILogger<ClassificationProcessor> _logger;
 
     public ClassificationProcessor(
@@ -31,13 +33,15 @@ public class ClassificationProcessor : IClassificationProcessor
         ITodoAiMetadataRepository todoAiMetadataRepository,
         ClassificationPipeline classificationPipeline,
         IClassificationNotifier classificationNotifier,
-        ILogger<ClassificationProcessor> logger)
+        ILogger<ClassificationProcessor> logger,
+        IAiTelemetry? telemetry = null)
     {
         _todoTaskRepository = todoTaskRepository;
         _todoAiMetadataRepository = todoAiMetadataRepository;
         _classificationPipeline = classificationPipeline;
         _classificationNotifier = classificationNotifier;
         _logger = logger;
+        _telemetry = telemetry ?? NullAiTelemetry.Instance;
     }
 
     public async Task<TaskClassificationDto> ProcessAsync(
@@ -134,6 +138,9 @@ public class ClassificationProcessor : IClassificationProcessor
                 latestTodo.Priority,
                 response.SuggestedPriority);
             await _todoAiMetadataRepository.SetWasOverriddenAsync(todo.Id, wasOverridden, cancellationToken);
+            _telemetry.RecordOverrideDecision(
+                AiTelemetryNames.ConfidenceBands.FromConfidence(response.Confidence),
+                wasOverridden);
 
             var result = new TaskClassificationDto
             {

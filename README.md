@@ -99,6 +99,30 @@ Config under `Ai:Observability`:
 - `CapturePayloadPreview` — off by default; when on, truncated prompt/response previews may appear on spans  
 - `RecordTokenUsage` — records provider token counts when available (often missing for Ollama)
 
+Quality metrics on the same meter: `ai.quality.events` (validation_failed, insufficient_context, tool_arg_rejected, budget_exceeded, ungrounded_answer) and `ai.classify.override_decisions` (band × overridden).
+
+## AI validation and evaluation
+
+**Realtime (every request):** deterministic C# gates — input sanitize, schema/arg validation, RAG refuse-on-empty + Guid grounding, tool allowlist + status allowlist, sprint tool/time budgets. LLM-as-judge is **not** on the hot path.
+
+**Offline eval fixtures:**
+
+| File | Purpose |
+|------|---------|
+| [`samples/ai-eval-todos.csv`](samples/ai-eval-todos.csv) | Classify accuracy (`ExpectedPriority`) |
+| [`samples/ai-eval-rag.json`](samples/ai-eval-rag.json) | RAG Triad fixtures (recall / insufficient) |
+| [`samples/ai-eval-tool-proposals.json`](samples/ai-eval-tool-proposals.json) | Tool name + arg schema fixtures |
+
+Harness code lives under `src/AiLayer/Evaluation/`. Unit tests in `AiLayer.Tests` run with mocks. For a live LLM classify pass:
+
+```bash
+export AI_EVAL_LIVE=1
+# then run a small console/script that calls ClassificationPipeline per CSV row
+dotnet test src/Tests/AiLayer.Tests --filter ClassificationAccuracyHarness
+```
+
+Agent budgets (`Ai:Agents`): `MaxToolInvocationsPerJob` (12), `MaxPlannerRecoveryPasses` (1), `JobTimeoutSeconds` (240), plus existing `StuckAfterSeconds` (300).
+
 ## MCP (Claude Desktop)
 
 Standalone process in `src/McpServer` (stdio). Auth: Auth0 **Device Code** + refresh token (no pasted JWT). Tools: `create_todo`, `update_todo`, `search_todos`, `analyze_workload`.  
