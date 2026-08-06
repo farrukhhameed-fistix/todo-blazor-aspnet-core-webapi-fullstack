@@ -51,6 +51,15 @@ public class AgentsSettings
 
     /// <summary>Mark running sprint optimizer jobs stuck after this many seconds without heartbeat.</summary>
     public int StuckAfterSeconds { get; set; } = 300;
+
+    /// <summary>Hard stop when sprint planning tools are invoked this many times in one job.</summary>
+    public int MaxToolInvocationsPerJob { get; set; } = 12;
+
+    /// <summary>Max Planner recovery re-runs after an empty selection (0 = no recovery).</summary>
+    public int MaxPlannerRecoveryPasses { get; set; } = 1;
+
+    /// <summary>Cancel a running sprint optimizer job after this many seconds.</summary>
+    public int JobTimeoutSeconds { get; set; } = 240;
 }
 
 public class EmbeddingSettings

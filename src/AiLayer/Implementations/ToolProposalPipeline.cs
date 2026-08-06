@@ -79,21 +79,45 @@ public sealed class ToolProposalPipeline
             var raw = await _llm.GetCompletionAsync(fullPrompt, cancellationToken);
             var parsed = ParseResponse(raw);
 
-            var allowedCalls = parsed.Calls
-                .Where(c => TodoToolDefinitions.IsAllowed(c.ToolName))
-                .Select(c => new ProposedToolCall
+            var allowedCalls = new List<ProposedToolCall>();
+            foreach (var c in parsed.Calls.Where(c => TodoToolDefinitions.IsAllowed(c.ToolName)))
+            {
+                var toolName = TodoToolDefinitions.NormalizeName(c.ToolName);
+                var args = c.Arguments ?? new Dictionary<string, JsonElement>();
+                var validation = ToolArgumentValidator.Validate(toolName, args);
+                if (!validation.IsValid)
                 {
-                    ToolName = TodoToolDefinitions.NormalizeName(c.ToolName),
-                    Arguments = c.Arguments ?? new Dictionary<string, JsonElement>()
-                })
-                .ToList();
+                    _logger.LogWarning(
+                        "Dropping proposed tool {ToolName}: {Error}",
+                        toolName,
+                        validation.Error);
+                    _telemetry.RecordQualityEvent(
+                        AiTelemetryNames.Features.ProposeTools,
+                        AiTelemetryNames.QualityEvents.ToolArgRejected);
+                    continue;
+                }
 
+                allowedCalls.Add(new ProposedToolCall
+                {
+                    ToolName = toolName,
+                    Arguments = args
+                });
+            }
+
+            operation.Activity?.SetTag(AiTelemetryNames.Tags.PromptVersion, AiPromptVersions.ProposeTools);
             operation.SetOutcome(AiTelemetryNames.Outcomes.Success);
+
+            var explanation = string.IsNullOrWhiteSpace(parsed.Explanation)
+                ? "Proposed tool calls based on your request."
+                : parsed.Explanation.Trim();
+            if (explanation.Length > LlmInputLimits.ExplanationMaxLength)
+            {
+                explanation = explanation[..LlmInputLimits.ExplanationMaxLength];
+            }
+
             return new ToolProposalPipelineResult
             {
-                Explanation = string.IsNullOrWhiteSpace(parsed.Explanation)
-                    ? "Proposed tool calls based on your request."
-                    : parsed.Explanation.Trim(),
+                Explanation = explanation,
                 ProposedCalls = allowedCalls,
                 Model = "function-calling"
             };

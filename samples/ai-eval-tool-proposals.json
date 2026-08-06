@@ -1,0 +1,26 @@
+[
+  {
+    "id": "create-high-priority",
+    "prompt": "Create a todo titled Fix login bug with High priority",
+    "expectedToolNames": ["create_todo"],
+    "requiredArgKeys": { "create_todo": ["title"] }
+  },
+  {
+    "id": "mark-complete",
+    "prompt": "Mark todo aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee as complete",
+    "expectedToolNames": ["mark_complete"],
+    "requiredArgKeys": { "mark_complete": ["id"] }
+  },
+  {
+    "id": "search",
+    "prompt": "Search my todos for payment webhook",
+    "expectedToolNames": ["search_todos"],
+    "requiredArgKeys": { "search_todos": ["query"] }
+  },
+  {
+    "id": "stats",
+    "prompt": "Show my todo statistics",
+    "expectedToolNames": ["get_statistics"],
+    "requiredArgKeys": { "get_statistics": [] }
+  }
+]

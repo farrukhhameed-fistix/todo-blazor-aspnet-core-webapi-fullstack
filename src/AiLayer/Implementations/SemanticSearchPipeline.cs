@@ -42,8 +42,21 @@ public sealed class SemanticSearchPipeline
         var sw = Stopwatch.StartNew();
         try
         {
+            var sanitizedQuery = PromptInputSanitizer.SanitizeAndTruncate(
+                request.Query, LlmInputLimits.SemanticSearchQueryMaxLength);
+            if (string.IsNullOrWhiteSpace(sanitizedQuery))
+            {
+                operation.SetOutcome(AiTelemetryNames.Outcomes.Success);
+                return new SemanticSearchPipelineResult
+                {
+                    Hits = Array.Empty<VectorSearchHit>(),
+                    ExecutionTimeMs = 0,
+                    Model = _embeddingService.ModelName
+                };
+            }
+
             var embedding = await _embeddingService.GenerateEmbeddingAsync(
-                request.Query,
+                sanitizedQuery,
                 EmbeddingInputKind.Query,
                 cancellationToken);
             var hits = await _vectorStore.SearchAsync(

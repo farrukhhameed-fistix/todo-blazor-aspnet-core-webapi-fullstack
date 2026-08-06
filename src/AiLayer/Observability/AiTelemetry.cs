@@ -36,6 +36,14 @@ public sealed class AiTelemetry : IAiTelemetry
         AiTelemetryNames.OperationErrorsInstrument,
         description: "AI feature errors by outcome");
 
+    private static readonly Counter<long> QualityEvents = Meter.CreateCounter<long>(
+        AiTelemetryNames.QualityEventsInstrument,
+        description: "AI quality events (validation, insufficient context, budgets)");
+
+    private static readonly Counter<long> OverrideDecisions = Meter.CreateCounter<long>(
+        AiTelemetryNames.OverrideDecisionsInstrument,
+        description: "Classification override decisions by confidence band");
+
     private readonly AiConfiguration _aiConfig;
     private readonly ILogger<AiTelemetry> _logger;
 
@@ -283,6 +291,18 @@ public sealed class AiTelemetry : IAiTelemetry
             new KeyValuePair<string, object?>("feature", feature),
             new KeyValuePair<string, object?>("outcome", outcome));
 
+    public void RecordQualityEvent(string feature, string eventName) =>
+        QualityEvents.Add(
+            1,
+            new KeyValuePair<string, object?>("feature", feature),
+            new KeyValuePair<string, object?>("event", eventName));
+
+    public void RecordOverrideDecision(string confidenceBand, bool wasOverridden) =>
+        OverrideDecisions.Add(
+            1,
+            new KeyValuePair<string, object?>("band", confidenceBand),
+            new KeyValuePair<string, object?>("overridden", wasOverridden));
+
     internal static void RecordOperationDuration(string feature, long durationMs, string outcome) =>
         OperationDuration.Record(
             durationMs,
@@ -342,6 +362,14 @@ public sealed class NullAiTelemetry : IAiTelemetry
     }
 
     public void RecordOperationError(string feature, string outcome)
+    {
+    }
+
+    public void RecordQualityEvent(string feature, string eventName)
+    {
+    }
+
+    public void RecordOverrideDecision(string confidenceBand, bool wasOverridden)
     {
     }
 }

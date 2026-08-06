@@ -22,7 +22,7 @@ public static class PromptInputSanitizer
             return string.Empty;
         }
 
-        var withoutControlChars = RemoveControlCharacters(input);
+        var withoutControlChars = StripControlCharacters(input);
 
         return withoutControlChars
             .Replace("<!--", string.Empty, StringComparison.Ordinal)
@@ -31,8 +31,17 @@ public static class PromptInputSanitizer
             .Replace("}", "}}", StringComparison.Ordinal);
     }
 
-    private static string RemoveControlCharacters(string input)
+    /// <summary>
+    /// Strips control characters for display/output text without escaping braces
+    /// (brace escaping is only needed for Semantic Kernel template inputs).
+    /// </summary>
+    public static string StripControlCharacters(string? input)
     {
+        if (string.IsNullOrEmpty(input))
+        {
+            return string.Empty;
+        }
+
         var builder = new StringBuilder(input.Length);
 
         foreach (var character in input)

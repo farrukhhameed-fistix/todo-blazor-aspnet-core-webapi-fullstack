@@ -78,6 +78,15 @@ public sealed class ToolExecutor : IToolExecutor
                 }
 
                 var toolName = TodoToolDefinitions.NormalizeName(call.ToolName);
+                var argValidation = ToolArgumentValidator.Validate(toolName, call.Arguments);
+                if (!argValidation.IsValid)
+                {
+                    _telemetry.RecordQualityEvent(
+                        AiTelemetryNames.Features.ExecuteTools,
+                        AiTelemetryNames.QualityEvents.ToolArgRejected);
+                    throw new InvalidOperationException(argValidation.Error ?? "Invalid tool arguments.");
+                }
+
                 outcome = toolName switch
                 {
                     TodoToolDefinitions.CreateTodo => await ExecuteCreateAsync(call.Arguments, cancellationToken),
@@ -147,6 +156,11 @@ public sealed class ToolExecutor : IToolExecutor
         var category = GetString(args, "category");
         if (!string.IsNullOrWhiteSpace(category) && createResult.Payload is not null)
         {
+            if (category.Length > LlmInputLimits.CategoryMaxLength)
+            {
+                category = category[..LlmInputLimits.CategoryMaxLength];
+            }
+
             var todo = await _todoTaskRepository.Get(createResult.Payload.ExternalId, cancellationToken);
             TodoAccessGuard.EnsureCanAccess(todo, _currentUserService);
             todo.Category = category;
@@ -187,9 +201,15 @@ public sealed class ToolExecutor : IToolExecutor
 
         if (!string.IsNullOrWhiteSpace(status))
         {
+            if (!ToolArgumentValidator.IsAllowedStatus(status))
+            {
+                throw new InvalidOperationException(
+                    "Argument 'status' must be one of: Pending, InProgress, Completed.");
+            }
+
             todo = await _todoTaskRepository.Get(id, cancellationToken);
             TodoAccessGuard.EnsureCanAccess(todo, _currentUserService);
-            todo.Status = status;
+            todo.Status = ToolArgumentValidator.NormalizeStatus(status);
             await _todoTaskRepository.Update(todo, cancellationToken);
         }
 
@@ -253,6 +273,11 @@ public sealed class ToolExecutor : IToolExecutor
         CancellationToken cancellationToken)
     {
         var query = RequireString(args, "query");
+        if (query.Length > LlmInputLimits.ToolSearchQueryMaxLength)
+        {
+            query = query[..LlmInputLimits.ToolSearchQueryMaxLength];
+        }
+
         var isAdmin = _currentUserService.HasAdminProfile;
         var userId = TodoAccessGuard.RequireCurrentUserId(_currentUserService);
 

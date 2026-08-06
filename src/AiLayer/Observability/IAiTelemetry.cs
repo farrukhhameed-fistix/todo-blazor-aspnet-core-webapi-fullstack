@@ -37,6 +37,10 @@ public interface IAiTelemetry
     void CompleteToolCall(Activity? activity, long durationMs, bool success, string? error = null);
 
     void RecordOperationError(string feature, string outcome);
+
+    void RecordQualityEvent(string feature, string eventName);
+
+    void RecordOverrideDecision(string confidenceBand, bool wasOverridden);
 }
 
 /// <summary>Tracks end-to-end AI feature duration and outcome.</summary>

@@ -41,19 +41,72 @@ public sealed class RAGPipeline
             AiTelemetryNames.Features.Rag,
             model: model,
             provider: _aiConfig.Provider);
+        operation.Activity?.SetTag(AiTelemetryNames.Tags.PromptVersion, AiPromptVersions.Rag);
+
+        var sourceIds = request.SourceTodos.Select(s => s.ExternalId).ToList();
 
         try
         {
+            if (request.SourceTodos.Count == 0)
+            {
+                operation.SetOutcome(AiTelemetryNames.Outcomes.InsufficientContext);
+                _telemetry.RecordQualityEvent(
+                    AiTelemetryNames.Features.Rag,
+                    AiTelemetryNames.QualityEvents.InsufficientContext);
+
+                return new RagPipelineResult
+                {
+                    Answer = LlmOutputValidator.InsufficientContextMessage,
+                    SourceTodoIds = sourceIds,
+                    Model = model
+                };
+            }
+
+            var sanitizedQuestion = PromptInputSanitizer.SanitizeAndTruncate(
+                request.Question, LlmInputLimits.ToolSearchQueryMaxLength * 4);
+            if (string.IsNullOrWhiteSpace(sanitizedQuestion))
+            {
+                operation.SetOutcome(AiTelemetryNames.Outcomes.ValidationFailed);
+                _telemetry.RecordQualityEvent(
+                    AiTelemetryNames.Features.Rag,
+                    AiTelemetryNames.QualityEvents.ValidationFailed);
+
+                return new RagPipelineResult
+                {
+                    Answer = LlmOutputValidator.InsufficientContextMessage,
+                    SourceTodoIds = sourceIds,
+                    Model = model
+                };
+            }
+
             var todayUtc = DateTime.UtcNow.Date;
             var contextBuilder = new StringBuilder();
-            contextBuilder.AppendLine($"Context focus: {request.Context}");
+            contextBuilder.AppendLine($"Context focus: {PromptInputSanitizer.SanitizeAndTruncate(request.Context, 64)}");
             contextBuilder.AppendLine($"Today's date (UTC): {todayUtc:yyyy-MM-dd}");
+
             foreach (var source in request.SourceTodos)
             {
-                contextBuilder.AppendLine($"- [{source.ExternalId}] {source.Title} | priority={source.Priority} status={source.Status} due={source.DueDate:u}");
-                if (!string.IsNullOrWhiteSpace(source.Description))
+                if (contextBuilder.Length >= LlmInputLimits.RagTotalContextMaxLength)
                 {
-                    contextBuilder.AppendLine($"  {source.Description.Trim()}");
+                    break;
+                }
+
+                var title = PromptInputSanitizer.SanitizeAndTruncate(source.Title, LlmInputLimits.TitleMaxLength);
+                var description = PromptInputSanitizer.SanitizeAndTruncate(
+                    source.Description, LlmInputLimits.RagContextDescriptionMaxLength);
+
+                contextBuilder.AppendLine(
+                    $"- [{source.ExternalId}] {title} | priority={source.Priority} status={source.Status} due={source.DueDate:u}");
+                if (!string.IsNullOrWhiteSpace(description))
+                {
+                    var remaining = LlmInputLimits.RagTotalContextMaxLength - contextBuilder.Length;
+                    if (remaining <= 0)
+                    {
+                        break;
+                    }
+
+                    var clipped = description.Length <= remaining ? description : description[..remaining];
+                    contextBuilder.AppendLine($"  {clipped}");
                 }
             }
 
@@ -61,23 +114,43 @@ public sealed class RAGPipeline
                 You are a task-management assistant. Answer the user's question using ONLY the provided task context.
                 If the context is insufficient, say what is missing. Be concise and cite task titles.
                 Today's date (UTC) is {todayUtc:yyyy-MM-dd}. Interpret relative time phrases such as "this week", "next month", or "this year" relative to that date and only against the task due dates in the context.
+                Do not invent todo GUIDs. Only reference ids that appear in the task context.
 
                 Task context:
                 {contextBuilder}
 
-                Question: {request.Question}
+                Question: {sanitizedQuestion}
                 """;
 
             _logger.LogInformation("Running RAG for context {Context} with {Count} sources", request.Context, request.SourceTodos.Count);
             var answer = await _llm.GetCompletionAsync(prompt, cancellationToken);
-            operation.SetOutcome(AiTelemetryNames.Outcomes.Success);
 
-            return new RagPipelineResult
+            try
             {
-                Answer = answer.Trim(),
-                SourceTodoIds = request.SourceTodos.Select(s => s.ExternalId).ToList(),
-                Model = model
-            };
+                var validated = LlmOutputValidator.ValidateRagAnswer(answer, sourceIds);
+                operation.SetOutcome(AiTelemetryNames.Outcomes.Success);
+                return new RagPipelineResult
+                {
+                    Answer = validated,
+                    SourceTodoIds = sourceIds,
+                    Model = model
+                };
+            }
+            catch (InvalidOperationException ex)
+            {
+                _logger.LogWarning(ex, "RAG answer failed faithfulness validation");
+                operation.SetOutcome(AiTelemetryNames.Outcomes.ValidationFailed);
+                _telemetry.RecordQualityEvent(
+                    AiTelemetryNames.Features.Rag,
+                    AiTelemetryNames.QualityEvents.UngroundedAnswer);
+
+                return new RagPipelineResult
+                {
+                    Answer = LlmOutputValidator.UngroundedAnswerMessage,
+                    SourceTodoIds = sourceIds,
+                    Model = model
+                };
+            }
         }
         catch
         {

@@ -13,6 +13,8 @@ public static class AiTelemetryNames
     public const string ToolDurationInstrument = "ai.tool.duration";
     public const string OperationDurationInstrument = "ai.operation.duration";
     public const string OperationErrorsInstrument = "ai.operation.errors";
+    public const string QualityEventsInstrument = "ai.quality.events";
+    public const string OverrideDecisionsInstrument = "ai.classify.override_decisions";
 
     public static class Features
     {
@@ -33,9 +35,35 @@ public static class AiTelemetryNames
         public const string Success = "success";
         public const string Timeout = "timeout";
         public const string ParseError = "parse_error";
+        public const string ValidationFailed = "validation_failed";
+        public const string InsufficientContext = "insufficient_context";
+        public const string BudgetExceeded = "budget_exceeded";
         public const string Fallback = "fallback";
         public const string Error = "error";
         public const string Cancelled = "cancelled";
+    }
+
+    public static class QualityEvents
+    {
+        public const string ValidationFailed = "validation_failed";
+        public const string InsufficientContext = "insufficient_context";
+        public const string ToolArgRejected = "tool_arg_rejected";
+        public const string BudgetExceeded = "budget_exceeded";
+        public const string UngroundedAnswer = "ungrounded_answer";
+    }
+
+    public static class ConfidenceBands
+    {
+        public const string High = "high";
+        public const string Mid = "mid";
+        public const string Low = "low";
+
+        public static string FromConfidence(float confidence) => confidence switch
+        {
+            >= 0.85f => High,
+            >= 0.60f => Mid,
+            _ => Low
+        };
     }
 
     public static class Tags
@@ -60,5 +88,7 @@ public static class AiTelemetryNames
         public const string ToolArgsPreview = "ai.tool.args_preview";
         public const string EmbeddingDimension = "ai.embedding.dimension";
         public const string Provider = "ai.provider";
+        public const string PromptVersion = "ai.prompt_version";
+        public const string ConfidenceBand = "ai.confidence_band";
     }
 }

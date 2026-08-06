@@ -1,6 +1,7 @@
 #nullable enable
 
 using Fistix.TaskManager.AiLayer.Agents;
+using Fistix.TaskManager.AiLayer.Observability;
 using Fistix.TaskManager.AiLayer.Shared;
 using Fistix.TaskManager.Core.Abstractions.Repositories;
 using Fistix.TaskManager.Core.DomainModel.Aggregates;
@@ -65,6 +66,7 @@ public class SprintOptimizerAgent
     private readonly SprintPlanningTools _tools;
     private readonly ITodoTaskRepository _todoTaskRepository;
     private readonly AiConfiguration _aiConfig;
+    private readonly IAiTelemetry _telemetry;
     private readonly ILogger<SprintOptimizerAgent> _logger;
 
     public SprintOptimizerAgent(
@@ -72,13 +74,15 @@ public class SprintOptimizerAgent
         SprintPlanningTools tools,
         ITodoTaskRepository todoTaskRepository,
         AiConfiguration aiConfig,
-        ILogger<SprintOptimizerAgent> logger)
+        ILogger<SprintOptimizerAgent> logger,
+        IAiTelemetry? telemetry = null)
     {
         _chatClientFactory = chatClientFactory;
         _tools = tools;
         _todoTaskRepository = todoTaskRepository;
         _aiConfig = aiConfig;
         _logger = logger;
+        _telemetry = telemetry ?? NullAiTelemetry.Instance;
     }
 
     public async Task<SprintOptimizationPlan> PlanAsync(
@@ -90,7 +94,15 @@ public class SprintOptimizerAgent
         Func<string, string?, CancellationToken, Task>? onPhaseChanged = null)
     {
         var multi = IsMultiAgentMode();
-        await _tools.ConfigureAsync(ownerId, maxTasks, durationDays, name, multi, cancellationToken);
+        var maxToolInvocations = Math.Max(1, _aiConfig.Agents?.MaxToolInvocationsPerJob ?? 12);
+        await _tools.ConfigureAsync(
+            ownerId,
+            maxTasks,
+            durationDays,
+            name,
+            multi,
+            cancellationToken,
+            maxToolInvocations);
 
         try
         {
@@ -103,13 +115,23 @@ public class SprintOptimizerAgent
 
             EnsureToolStepsPresent(response);
 
-            if (_tools.SelectedTodos.Count == 0 && multi)
+            var recoveryPasses = Math.Max(0, _aiConfig.Agents?.MaxPlannerRecoveryPasses ?? 1);
+            if (_tools.SelectedTodos.Count == 0 && multi && recoveryPasses > 0 && !_tools.BudgetExceeded)
             {
-                _logger.LogWarning(
-                    "Planner did not select tasks after workflow; attempting recovery propose. Steps: {Steps}",
-                    string.Join(" → ", _tools.Steps.Select(s => $"{s.AgentName}/{s.ToolName}")));
+                for (var pass = 0; pass < recoveryPasses && _tools.SelectedTodos.Count == 0; pass++)
+                {
+                    _logger.LogWarning(
+                        "Planner did not select tasks after workflow; recovery pass {Pass}/{Max}. Steps: {Steps}",
+                        pass + 1,
+                        recoveryPasses,
+                        string.Join(" → ", _tools.Steps.Select(s => $"{s.AgentName}/{s.ToolName}")));
 
-                await TryRecoverPlannerSelectionAsync(chatClient, goal, maxTasks, durationDays, name, cancellationToken);
+                    await TryRecoverPlannerSelectionAsync(chatClient, goal, maxTasks, durationDays, name, cancellationToken);
+                    if (_tools.BudgetExceeded)
+                    {
+                        break;
+                    }
+                }
             }
 
             if (_tools.CreatedSprintId.HasValue && _tools.SelectedTodos.Count > 0)
@@ -134,6 +156,14 @@ public class SprintOptimizerAgent
                 ex.Status,
                 body);
         }
+        catch (InvalidOperationException ex) when (_tools.BudgetExceeded ||
+            ex.Message.Contains("tool budget exceeded", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning(ex, "Sprint agent over budget; falling back to heuristic");
+            _telemetry.RecordQualityEvent(
+                AiTelemetryNames.Features.SprintOptimizer,
+                AiTelemetryNames.QualityEvents.BudgetExceeded);
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "MAF sprint agent failed; falling back to heuristic selection");
@@ -141,7 +171,12 @@ public class SprintOptimizerAgent
 
         if (onPhaseChanged is not null)
         {
-            await onPhaseChanged(SprintOptimizerPhase.Persisting, "Using heuristic fallback selection.", cancellationToken);
+            await onPhaseChanged(
+                SprintOptimizerPhase.Persisting,
+                _tools.BudgetExceeded
+                    ? "Tool budget exceeded; using heuristic fallback selection."
+                    : "Using heuristic fallback selection.",
+                cancellationToken);
         }
 
         return await HeuristicFallbackAsync(ownerId, maxTasks, durationDays, cancellationToken);
@@ -185,9 +220,10 @@ public class SprintOptimizerAgent
         var analystResponse = await analyst.RunAsync(goal, cancellationToken: cancellationToken);
         EnsureToolStepsPresent(analystResponse);
 
-        var analystBrief = string.IsNullOrWhiteSpace(analystResponse.Text)
-            ? "Analyst did not return a summary. Prioritize High priority and earliest due dates."
-            : analystResponse.Text.Trim();
+        var analystBrief = LlmOutputValidator.ValidateAgentText(
+            string.IsNullOrWhiteSpace(analystResponse.Text)
+                ? "Analyst did not return a summary. Prioritize High priority and earliest due dates."
+                : analystResponse.Text);
 
         _logger.LogInformation(
             "Analyst phase complete. Tool steps={StepCount}, brief length={BriefLength}",

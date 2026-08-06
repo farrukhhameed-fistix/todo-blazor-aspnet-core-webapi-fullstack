@@ -98,6 +98,7 @@ public class AiQueryCommandHandler : IRequestHandler<AiQueryCommand, AiQueryComm
             }
         }
 
+        // Empty retrieval: still go through RAGPipeline so insufficient-context is recorded once.
         var rag = await _ragPipeline.ExecuteAsync(new RagPipelineRequest
         {
             Question = command.Question,
