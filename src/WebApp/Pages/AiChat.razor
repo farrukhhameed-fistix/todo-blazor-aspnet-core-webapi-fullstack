@@ -17,11 +17,6 @@
 <MudTabs @bind-ActivePanelIndex="_tabIndex" Rounded="true" ApplyEffectsToContainer="true" PanelClass="pa-4">
   <MudTabPanel Text="Ask (RAG)" Icon="@Icons.Material.Filled.QuestionAnswer">
     <MudStack Spacing="3" Style="max-width: 40rem;">
-      <MudSelect @bind-Value="_context" Label="Context" Variant="Variant.Outlined">
-        <MudSelectItem Value="@("workload")">workload</MudSelectItem>
-        <MudSelectItem Value="@("week")">week</MudSelectItem>
-        <MudSelectItem Value="@("project")">project</MudSelectItem>
-      </MudSelect>
       <MudTextField @bind-Value="_question"
                     Label="Question"
                     Variant="Variant.Outlined"
@@ -265,7 +260,7 @@
 {
   <MudPaper Class="pa-4 mt-4" Elevation="2">
     <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
-      Model: @_response.Model · Context: @_response.Context
+      Model: @_response.Model
     </MudText>
     <MudText Typo="Typo.body1" Style="white-space: pre-wrap;">@_response.Answer</MudText>
     @if (_response.Sources.Count > 0)
@@ -274,7 +269,19 @@
       <MudList T="string" Dense="true">
         @foreach (var source in _response.Sources)
         {
-          <MudListItem><code>@source</code></MudListItem>
+          <MudListItem>
+            <div>
+              <MudText Typo="Typo.body2">
+                @(string.IsNullOrWhiteSpace(source.Title) ? "(untitled)" : source.Title)
+                · <code>@source.ExternalId</code>
+              </MudText>
+              <MudText Typo="Typo.caption" Color="Color.Secondary">
+                @(source.DueDate.HasValue ? $"due {source.DueDate:yyyy-MM-dd}" : "due —")
+                · @(string.IsNullOrWhiteSpace(source.Priority) ? "—" : source.Priority)
+                · @(string.IsNullOrWhiteSpace(source.Status) ? "—" : source.Status)
+              </MudText>
+            </div>
+          </MudListItem>
         }
       </MudList>
     }
@@ -284,7 +291,6 @@
 @code {
   private int _tabIndex;
   private string _question = string.Empty;
-  private string _context = "workload";
   private string _toolPrompt = string.Empty;
   private int _maxTasks = 12;
   private int _durationDays = 14;
@@ -507,7 +513,7 @@
     _loading = true;
     try
     {
-      var result = await TodoDataService.AiQuery(_question.Trim(), _context);
+      var result = await TodoDataService.AiQuery(_question.Trim());
       if (!result.IsSucceed || result.Payload is null)
       {
         _error = result.Message ?? "AI query failed.";

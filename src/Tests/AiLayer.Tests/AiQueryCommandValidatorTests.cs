@@ -8,20 +8,17 @@ public class AiQueryCommandValidatorTests
 {
     private readonly AiQueryCommandValidator _validator = new();
 
-    [Theory]
-    [InlineData("week")]
-    [InlineData("project")]
-    [InlineData("workload")]
-    public void AcceptsAllowedContexts(string context)
+    [Fact]
+    public void AcceptsNonEmptyQuestion()
     {
-        var result = _validator.Validate(new AiQueryCommand { Question = "What am I working on?", Context = context });
+        var result = _validator.Validate(new AiQueryCommand { Question = "What am I working on?" });
         Assert.True(result.IsValid);
     }
 
     [Fact]
-    public void RejectsInvalidContext()
+    public void RejectsEmptyQuestion()
     {
-        var result = _validator.Validate(new AiQueryCommand { Question = "What am I working on?", Context = "galaxy" });
+        var result = _validator.Validate(new AiQueryCommand { Question = "" });
         Assert.False(result.IsValid);
     }
 }

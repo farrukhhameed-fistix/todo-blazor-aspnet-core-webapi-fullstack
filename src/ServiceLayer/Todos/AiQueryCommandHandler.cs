@@ -1,3 +1,5 @@
+#nullable enable
+
 using Fistix.TaskManager.AiLayer.Implementations;
 using Fistix.TaskManager.AiLayer.Models;
 using Fistix.TaskManager.AiLayer.Shared;
@@ -55,17 +57,154 @@ public class AiQueryCommandHandler : IRequestHandler<AiQueryCommand, AiQueryComm
 
         var userId = TodoAccessGuard.RequireCurrentUserId(_currentUserService);
         var isAdmin = _currentUserService.HasAdminProfile;
-        var context = command.Context.Trim().ToLowerInvariant();
 
+        // Temporal phrases drive a due-date filter; otherwise semantic RAG on the raw question.
+        var temporal = RagTemporalQuery.Detect(command.Question);
+        if (temporal.IsTemporal)
+        {
+            return await HandleTemporalAsync(
+                command.Question,
+                temporal,
+                userId,
+                isAdmin,
+                cancellationToken);
+        }
+
+        return await HandleSemanticRagAsync(
+            command.Question,
+            userId,
+            isAdmin,
+            cancellationToken);
+    }
+
+    private async Task<AiQueryCommandResult> HandleTemporalAsync(
+        string question,
+        RagTemporalWindow window,
+        Guid userId,
+        bool isAdmin,
+        CancellationToken cancellationToken)
+    {
+        var todos = isAdmin
+            ? await _todoTaskRepository.GetAll(cancellationToken)
+            : await _todoTaskRepository.GetByOwner(userId, cancellationToken);
+
+        var excludeCompleted = RagTemporalQuery.ShouldExcludeCompleted(question)
+                               || window.Kind == RagTemporalKind.Overdue;
+
+        var matched = todos
+            .Where(t => isAdmin || t.CreatedByUserId == userId)
+            .Where(t => !excludeCompleted || !RagTemporalQuery.IsCompleted(t))
+            .Where(t => RagTemporalQuery.Matches(t, window))
+            .OrderBy(t => t.DueDate)
+            .ThenBy(t => t.Title)
+            .Take(RagTemporalQuery.MaxTemporalResults)
+            .ToList();
+
+        foreach (var todo in matched)
+        {
+            if (!isAdmin)
+            {
+                TodoAccessGuard.EnsureCanAccess(todo, _currentUserService);
+            }
+        }
+
+        var sourceDtos = matched.Select(ToSourceDto).ToList();
+
+        // Empty window or plain list → deterministic (no LLM calendar guessing).
+        if (matched.Count == 0 || RagTemporalQuery.IsPlainListQuestion(question))
+        {
+            var answer = RagTemporalQuery.BuildDeterministicAnswer(matched, window);
+            await SaveConversationAsync(
+                userId, question, answer, sourceDtos, "deterministic-temporal", cancellationToken);
+
+            _logger.LogInformation(
+                "RAG temporal list kind={Kind} matched={Count} for user {UserId}",
+                window.Kind,
+                matched.Count,
+                userId);
+
+            return new AiQueryCommandResult
+            {
+                Payload = new AiQueryResponseDto
+                {
+                    Answer = answer,
+                    Sources = sourceDtos,
+                    Model = "deterministic-temporal"
+                }
+            };
+        }
+
+        // Non-list (priority / yes-no / summarize / …): date filter first, then LLM on that set only.
+        var ragSources = matched.Select(t => new RagSourceTodo
+        {
+            ExternalId = t.ExternalId,
+            Title = t.Title,
+            Description = t.Description,
+            Priority = t.Priority,
+            Status = t.Status,
+            DueDate = t.DueDate
+        }).ToList();
+
+        var rag = await _ragPipeline.ExecuteAsync(new RagPipelineRequest
+        {
+            Question = question,
+            PreFilteredDateWindow = window.Label,
+            SourceTodos = ragSources
+        }, cancellationToken);
+
+        await SaveConversationAsync(
+            userId, question, rag.Answer, sourceDtos, rag.Model, cancellationToken);
+
+        _logger.LogInformation(
+            "RAG temporal+LLM kind={Kind} matched={Count} for user {UserId}",
+            window.Kind,
+            matched.Count,
+            userId);
+
+        return new AiQueryCommandResult
+        {
+            Payload = new AiQueryResponseDto
+            {
+                Answer = rag.Answer,
+                Sources = sourceDtos,
+                Model = rag.Model
+            }
+        };
+    }
+
+    private async Task SaveConversationAsync(
+        Guid userId,
+        string question,
+        string answer,
+        List<AiQuerySourceDto> sources,
+        string model,
+        CancellationToken cancellationToken)
+    {
+        await _conversationRepository.AddAsync(new AiConversation
+        {
+            UserId = userId.ToString(),
+            Query = question,
+            Response = answer,
+            ContextTodosJson = JsonSerializer.Serialize(sources.Select(s => s.ExternalId)),
+            Model = model,
+            CreatedAt = DateTime.UtcNow
+        }, cancellationToken);
+    }
+
+    private async Task<AiQueryCommandResult> HandleSemanticRagAsync(
+        string question,
+        Guid userId,
+        bool isAdmin,
+        CancellationToken cancellationToken)
+    {
         var search = await _semanticSearchPipeline.ExecuteAsync(new SemanticSearchPipelineRequest
         {
-            Query = EnrichQuery(command.Question, context),
+            Query = question,
             Limit = 10,
             OwnerExternalId = isAdmin ? null : userId
         }, cancellationToken);
 
         var sources = new List<RagSourceTodo>();
-        var sourceIds = new List<Guid>();
         foreach (var hit in search.Hits)
         {
             try
@@ -74,11 +213,6 @@ public class AiQueryCommandHandler : IRequestHandler<AiQueryCommand, AiQueryComm
                 if (!isAdmin)
                 {
                     TodoAccessGuard.EnsureCanAccess(todo, _currentUserService);
-                }
-
-                if (!MatchesContextFilter(todo, context))
-                {
-                    continue;
                 }
 
                 sources.Add(new RagSourceTodo
@@ -90,7 +224,6 @@ public class AiQueryCommandHandler : IRequestHandler<AiQueryCommand, AiQueryComm
                     Status = todo.Status,
                     DueDate = todo.DueDate
                 });
-                sourceIds.Add(todo.ExternalId);
             }
             catch (Exception ex)
             {
@@ -98,53 +231,42 @@ public class AiQueryCommandHandler : IRequestHandler<AiQueryCommand, AiQueryComm
             }
         }
 
-        // Empty retrieval: still go through RAGPipeline so insufficient-context is recorded once.
         var rag = await _ragPipeline.ExecuteAsync(new RagPipelineRequest
         {
-            Question = command.Question,
-            Context = context,
+            Question = question,
             SourceTodos = sources
         }, cancellationToken);
 
-        await _conversationRepository.AddAsync(new AiConversation
+        var sourceDtos = sources.Select(s => new AiQuerySourceDto
         {
-            UserId = userId.ToString(),
-            Query = command.Question,
-            Response = rag.Answer,
-            Context = context,
-            ContextTodosJson = JsonSerializer.Serialize(sourceIds),
-            Model = rag.Model,
-            CreatedAt = DateTime.UtcNow
-        }, cancellationToken);
+            ExternalId = s.ExternalId,
+            Title = s.Title ?? string.Empty,
+            DueDate = s.DueDate,
+            Priority = s.Priority,
+            Status = s.Status
+        }).ToList();
+
+        await SaveConversationAsync(
+            userId, question, rag.Answer, sourceDtos, rag.Model, cancellationToken);
 
         return new AiQueryCommandResult
         {
             Payload = new AiQueryResponseDto
             {
                 Answer = rag.Answer,
-                Sources = sourceIds,
-                Model = rag.Model,
-                Context = context
+                Sources = sourceDtos,
+                Model = rag.Model
             }
         };
     }
 
-    private static string EnrichQuery(string question, string context) => context switch
-    {
-        "week" => $"{question} tasks due this week high priority",
-        "project" => $"{question} project workstream tasks",
-        _ => question
-    };
-
-    private static bool MatchesContextFilter(TodoTask todo, string context)
-    {
-        if (context == "week")
+    private static AiQuerySourceDto ToSourceDto(TodoTask todo) =>
+        new()
         {
-            var start = DateTime.UtcNow.Date;
-            var end = start.AddDays(7);
-            return todo.DueDate >= start && todo.DueDate < end;
-        }
-
-        return true;
-    }
+            ExternalId = todo.ExternalId,
+            Title = todo.Title ?? string.Empty,
+            DueDate = todo.DueDate,
+            Priority = todo.Priority,
+            Status = todo.Status
+        };
 }

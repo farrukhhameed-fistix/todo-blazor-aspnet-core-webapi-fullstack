@@ -10,7 +10,6 @@ public class AiConversation
     public string UserId { get; set; } = string.Empty;
     public string Query { get; set; } = string.Empty;
     public string Response { get; set; } = string.Empty;
-    public string? Context { get; set; }
     public string? ContextTodosJson { get; set; }
     public string? Model { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

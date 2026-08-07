@@ -81,8 +81,14 @@ public sealed class RAGPipeline
 
             var todayUtc = DateTime.UtcNow.Date;
             var contextBuilder = new StringBuilder();
-            contextBuilder.AppendLine($"Context focus: {PromptInputSanitizer.SanitizeAndTruncate(request.Context, 64)}");
             contextBuilder.AppendLine($"Today's date (UTC): {todayUtc:yyyy-MM-dd}");
+            if (!string.IsNullOrWhiteSpace(request.PreFilteredDateWindow))
+            {
+                contextBuilder.AppendLine(
+                    $"Due-date filter already applied by the system: {PromptInputSanitizer.SanitizeAndTruncate(request.PreFilteredDateWindow, 128)}. " +
+                    "Every task below is already inside that window — do not expand or shrink the calendar range. " +
+                    "Apply any other criteria (priority, status, topic, yes/no) only to these tasks.");
+            }
 
             foreach (var source in request.SourceTodos)
             {
@@ -110,11 +116,25 @@ public sealed class RAGPipeline
                 }
             }
 
+            var prefilteredLabel = string.IsNullOrWhiteSpace(request.PreFilteredDateWindow)
+                ? null
+                : PromptInputSanitizer.SanitizeAndTruncate(request.PreFilteredDateWindow, 128);
+
+            var dateGuidance = prefilteredLabel is null
+                ? $"""
+                Today's date (UTC) is {todayUtc:yyyy-MM-dd}. Interpret relative time phrases such as "this week", "next month", or "this year" relative to that date and only against the task due dates in the context (the due= field).
+                """
+                : $"""
+                Today's date (UTC) is {todayUtc:yyyy-MM-dd}. The task list is already filtered to: {prefilteredLabel}.
+                Do not add or remove tasks based on calendar reasoning — only filter/rank/answer using fields on the provided tasks (priority, status, title, description).
+                """;
+
             var prompt = $"""
                 You are a task-management assistant. Answer the user's question using ONLY the provided task context.
-                If the context is insufficient, say what is missing. Be concise and cite task titles.
-                Today's date (UTC) is {todayUtc:yyyy-MM-dd}. Interpret relative time phrases such as "this week", "next month", or "this year" relative to that date and only against the task due dates in the context.
+                If the context is insufficient, say what is missing. Be concise and cite task titles with their ids.
+                {dateGuidance}
                 Do not invent todo GUIDs. Only reference ids that appear in the task context.
+                If the user asks to list tasks, include EVERY task in the context with title and id — do not omit any.
 
                 Task context:
                 {contextBuilder}
@@ -122,7 +142,7 @@ public sealed class RAGPipeline
                 Question: {sanitizedQuestion}
                 """;
 
-            _logger.LogInformation("Running RAG for context {Context} with {Count} sources", request.Context, request.SourceTodos.Count);
+            _logger.LogInformation("Running RAG with {Count} sources", request.SourceTodos.Count);
             var answer = await _llm.GetCompletionAsync(prompt, cancellationToken);
 
             try

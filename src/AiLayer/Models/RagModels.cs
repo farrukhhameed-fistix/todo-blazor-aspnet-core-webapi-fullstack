@@ -5,7 +5,11 @@ namespace Fistix.TaskManager.AiLayer.Models;
 public sealed class RagPipelineRequest
 {
     public string Question { get; set; } = string.Empty;
-    public string Context { get; set; } = "workload";
+    /// <summary>
+    /// When set, sources were already limited to this due-date window by the caller.
+    /// The LLM must not re-interpret calendar phrases against other dates.
+    /// </summary>
+    public string? PreFilteredDateWindow { get; set; }
     public IReadOnlyList<RagSourceTodo> SourceTodos { get; set; } = Array.Empty<RagSourceTodo>();
 }
 

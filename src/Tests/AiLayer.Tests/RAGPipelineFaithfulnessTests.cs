@@ -33,7 +33,6 @@ public class RAGPipelineFaithfulnessTests
         var result = await pipeline.ExecuteAsync(new RagPipelineRequest
         {
             Question = "What is due this week?",
-            Context = "week",
             SourceTodos = []
         });
 
@@ -52,7 +51,6 @@ public class RAGPipelineFaithfulnessTests
         var result = await pipeline.ExecuteAsync(new RagPipelineRequest
         {
             Question = "What should I do?",
-            Context = "workload",
             SourceTodos =
             [
                 new RagSourceTodo
@@ -82,7 +80,6 @@ public class RAGPipelineFaithfulnessTests
         var result = await pipeline.ExecuteAsync(new RagPipelineRequest
         {
             Question = "Priorities?",
-            Context = "workload",
             SourceTodos =
             [
                 new RagSourceTodo

@@ -177,13 +177,12 @@ namespace Fistix.TaskManager.WebApp.Services.DataServices
       return result;
     }
 
-    public async Task<ApiCallResult<AiQueryResponseDto>> AiQuery(string question, string context = "workload")
+    public async Task<ApiCallResult<AiQueryResponseDto>> AiQuery(string question)
     {
       var result = new ApiCallResult<AiQueryResponseDto>();
       var command = new AiQueryCommand
       {
-        Question = question,
-        Context = context
+        Question = question
       };
 
       var response = await _httpClient.PostAsJsonAsync("api/ai/query", command);
