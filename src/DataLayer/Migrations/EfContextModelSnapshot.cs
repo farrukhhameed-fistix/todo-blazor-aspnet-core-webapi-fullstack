@@ -32,10 +32,6 @@ namespace Fistix.TaskManager.DataLayer.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
-                    b.Property<string>("Context")
-                        .HasMaxLength(50)
-                        .HasColumnType("character varying(50)");
-
                     b.Property<string>("ContextTodosJson")
                         .HasColumnType("text");
 

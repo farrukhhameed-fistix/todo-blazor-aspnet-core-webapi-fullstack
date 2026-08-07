@@ -153,7 +153,6 @@ namespace Fistix.TaskManager.DataLayer
         entityModel.ToTable("AiConversations");
         entityModel.HasKey(k => k.Id);
         entityModel.Property(p => p.UserId).HasMaxLength(256).IsRequired();
-        entityModel.Property(p => p.Context).HasMaxLength(50);
         entityModel.Property(p => p.Model).HasMaxLength(100);
         entityModel.HasIndex(p => p.UserId);
         entityModel.HasIndex(p => p.CreatedAt);
