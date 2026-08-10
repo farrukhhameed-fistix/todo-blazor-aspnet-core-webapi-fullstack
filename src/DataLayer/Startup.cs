@@ -17,6 +17,7 @@ namespace Fistix.TaskManager.DataLayer
       services.AddScoped<ITodoTaskRepository, TodoTaskRepository>();
       services.AddScoped<ITodoAiMetadataRepository, TodoAiMetadataRepository>();
       services.AddScoped<ITodoEmbeddingRepository, TodoEmbeddingRepository>();
+      services.AddScoped<ITodoLexicalSearchRepository, TodoLexicalSearchRepository>();
       services.AddScoped<IAiConversationRepository, AiConversationRepository>();
       services.AddScoped<IToolExecutionLogRepository, ToolExecutionLogRepository>();
       services.AddScoped<ISprintRepository, SprintRepository>();

@@ -33,14 +33,16 @@ public sealed class PgVectorEmbeddingStore : IVectorStore
         string embeddingModel,
         Guid? ownerExternalId,
         int limit,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyCollection<Guid>? allowedExternalIds = null)
     {
         var hits = await _repository.SearchSimilarAsync(
             queryEmbedding,
             embeddingModel,
             ownerExternalId,
             limit,
-            cancellationToken);
+            cancellationToken,
+            allowedExternalIds);
 
         return hits
             .Select(h => new VectorSearchHit(

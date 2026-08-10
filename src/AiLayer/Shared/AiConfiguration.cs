@@ -158,8 +158,20 @@ public class AiBatchConfiguration
 public class SemanticSearchConfiguration
 {
     /// <summary>
-    /// Minimum cosine similarity (0–1) required to keep a hit.
+    /// Minimum cosine similarity (0–1) required to keep a hit on the vector-only path.
     /// Nearest-neighbor search always returns something; scores below this are treated as irrelevant.
     /// </summary>
     public double MinSimilarity { get; set; } = 0.45;
+
+    /// <summary>When true, fuse vector + Postgres full-text with RRF (and light score blend).</summary>
+    public bool HybridEnabled { get; set; } = false;
+
+    /// <summary>How many vector neighbors to fetch before fusion when hybrid is on.</summary>
+    public int VectorCandidateLimit { get; set; } = 40;
+
+    /// <summary>How many FTS hits to fetch before fusion when hybrid is on.</summary>
+    public int LexicalCandidateLimit { get; set; } = 40;
+
+    /// <summary>RRF constant k (typical 60).</summary>
+    public int RrfK { get; set; } = 60;
 }

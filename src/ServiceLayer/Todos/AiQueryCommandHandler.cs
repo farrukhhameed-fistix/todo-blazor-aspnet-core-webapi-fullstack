@@ -108,11 +108,10 @@ public class AiQueryCommandHandler : IRequestHandler<AiQueryCommand, AiQueryComm
             }
         }
 
-        var sourceDtos = matched.Select(ToSourceDto).ToList();
-
         // Empty window or plain list → deterministic (no LLM calendar guessing).
         if (matched.Count == 0 || RagTemporalQuery.IsPlainListQuestion(question))
         {
+            var sourceDtos = matched.Select(ToSourceDto).ToList();
             var answer = RagTemporalQuery.BuildDeterministicAnswer(matched, window);
             await SaveConversationAsync(
                 userId, question, answer, sourceDtos, "deterministic-temporal", cancellationToken);
@@ -134,8 +133,35 @@ public class AiQueryCommandHandler : IRequestHandler<AiQueryCommand, AiQueryComm
             };
         }
 
-        // Non-list (priority / yes-no / summarize / …): date filter first, then LLM on that set only.
-        var ragSources = matched.Select(t => new RagSourceTodo
+        // Non-list: date filter first, then hybrid (when enabled) within the window, then LLM.
+        var ragTodos = matched;
+        var sourceDtosHybrid = matched.Select(ToSourceDto).ToList();
+        var hybridEnabled = _aiConfig.Features.SemanticSearch?.HybridEnabled == true;
+
+        if (hybridEnabled)
+        {
+            var allowedIds = matched.Select(t => t.ExternalId).ToList();
+            var search = await _semanticSearchPipeline.ExecuteAsync(new SemanticSearchPipelineRequest
+            {
+                Query = question,
+                Limit = 10,
+                OwnerExternalId = isAdmin ? null : userId,
+                AllowedExternalIds = allowedIds
+            }, cancellationToken);
+
+            if (search.Hits.Count > 0)
+            {
+                var byId = matched.ToDictionary(t => t.ExternalId);
+                ragTodos = search.Hits
+                    .Select(h => byId.GetValueOrDefault(h.TodoExternalId))
+                    .Where(t => t is not null)
+                    .Cast<TodoTask>()
+                    .ToList();
+                sourceDtosHybrid = ragTodos.Select(ToSourceDto).ToList();
+            }
+        }
+
+        var ragSources = ragTodos.Select(t => new RagSourceTodo
         {
             ExternalId = t.ExternalId,
             Title = t.Title,
@@ -153,12 +179,14 @@ public class AiQueryCommandHandler : IRequestHandler<AiQueryCommand, AiQueryComm
         }, cancellationToken);
 
         await SaveConversationAsync(
-            userId, question, rag.Answer, sourceDtos, rag.Model, cancellationToken);
+            userId, question, rag.Answer, sourceDtosHybrid, rag.Model, cancellationToken);
 
         _logger.LogInformation(
-            "RAG temporal+LLM kind={Kind} matched={Count} for user {UserId}",
+            "RAG temporal+LLM kind={Kind} matched={Matched} sources={Sources} hybrid={Hybrid} for user {UserId}",
             window.Kind,
             matched.Count,
+            sourceDtosHybrid.Count,
+            hybridEnabled,
             userId);
 
         return new AiQueryCommandResult
@@ -166,7 +194,7 @@ public class AiQueryCommandHandler : IRequestHandler<AiQueryCommand, AiQueryComm
             Payload = new AiQueryResponseDto
             {
                 Answer = rag.Answer,
-                Sources = sourceDtos,
+                Sources = sourceDtosHybrid,
                 Model = rag.Model
             }
         };

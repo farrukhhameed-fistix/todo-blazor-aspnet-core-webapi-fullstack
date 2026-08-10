@@ -29,7 +29,21 @@ public interface IVectorStore
         string embeddingModel,
         Guid? ownerExternalId,
         int limit,
+        CancellationToken cancellationToken = default,
+        IReadOnlyCollection<Guid>? allowedExternalIds = null);
+}
+
+/// <summary>Postgres full-text search over todo title/description.</summary>
+public interface ILexicalTodoSearch
+{
+    Task<IReadOnlyList<LexicalSearchHit>> SearchAsync(
+        string query,
+        Guid? ownerExternalId,
+        int limit,
+        IReadOnlyCollection<Guid>? allowedExternalIds = null,
         CancellationToken cancellationToken = default);
 }
 
 public sealed record VectorSearchHit(Guid TodoExternalId, int TodoId, double Similarity);
+
+public sealed record LexicalSearchHit(Guid TodoExternalId, int TodoId, double Rank);
