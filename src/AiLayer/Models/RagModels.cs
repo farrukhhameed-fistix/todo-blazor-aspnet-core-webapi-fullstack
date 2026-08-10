@@ -10,6 +10,13 @@ public sealed class RagPipelineRequest
     /// The LLM must not re-interpret calendar phrases against other dates.
     /// </summary>
     public string? PreFilteredDateWindow { get; set; }
+
+    /// <summary>When set, caller already filtered to this priority (High/Medium/Low).</summary>
+    public string? PreFilteredPriority { get; set; }
+
+    /// <summary>True when the user asked for recommendations / what to work on next.</summary>
+    public bool IsAdviceQuestion { get; set; }
+
     public IReadOnlyList<RagSourceTodo> SourceTodos { get; set; } = Array.Empty<RagSourceTodo>();
 }
 

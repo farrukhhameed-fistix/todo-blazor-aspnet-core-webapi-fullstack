@@ -137,6 +137,7 @@ public class AiFeaturesConfiguration
     public SemanticSearchConfiguration SemanticSearch { get; set; } = new();
     public AiRateLimitConfiguration SemanticSearchRateLimit { get; set; } = new();
     public bool EnableRag { get; set; } = false;
+    public RagConfiguration Rag { get; set; } = new();
     public AiRateLimitConfiguration RagRateLimit { get; set; } = new();
     public bool EnableFunctionCalling { get; set; } = false;
     public AiRateLimitConfiguration FunctionCallingRateLimit { get; set; } = new();
@@ -174,4 +175,11 @@ public class SemanticSearchConfiguration
 
     /// <summary>RRF constant k (typical 60).</summary>
     public int RrfK { get; set; } = 60;
+}
+
+/// <summary>Ask / RAG retrieval knobs (filters and prompts live in ServiceLayer + RAGPipeline).</summary>
+public class RagConfiguration
+{
+    /// <summary>Max todos passed into the LLM after structured filters + search.</summary>
+    public int RetrievalLimit { get; set; } = 5;
 }
