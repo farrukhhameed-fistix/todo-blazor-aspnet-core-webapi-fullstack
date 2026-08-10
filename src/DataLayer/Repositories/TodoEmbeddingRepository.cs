@@ -59,8 +59,14 @@ public class TodoEmbeddingRepository : ITodoEmbeddingRepository
         string embeddingModel,
         Guid? ownerExternalId,
         int limit,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyCollection<Guid>? allowedExternalIds = null)
     {
+        if (allowedExternalIds is { Count: 0 })
+        {
+            return Array.Empty<TodoEmbeddingSearchHit>();
+        }
+
         var queryVector = new Vector(queryEmbedding);
         var query = _context.TodoEmbeddings
             .AsNoTracking()
@@ -69,6 +75,12 @@ public class TodoEmbeddingRepository : ITodoEmbeddingRepository
         if (ownerExternalId.HasValue)
         {
             query = query.Where(e => e.TodoTask != null && e.TodoTask.CreatedByUserId == ownerExternalId.Value);
+        }
+
+        if (allowedExternalIds is { Count: > 0 })
+        {
+            var allowed = allowedExternalIds.ToList();
+            query = query.Where(e => e.TodoTask != null && allowed.Contains(e.TodoTask.ExternalId));
         }
 
         var hits = await query

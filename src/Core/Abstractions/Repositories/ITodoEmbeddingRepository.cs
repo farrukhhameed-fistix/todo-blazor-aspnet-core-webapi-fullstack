@@ -17,7 +17,8 @@ public interface ITodoEmbeddingRepository
         string embeddingModel,
         Guid? ownerExternalId,
         int limit,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        IReadOnlyCollection<Guid>? allowedExternalIds = null);
     Task<IReadOnlyList<Guid>> GetTodoExternalIdsMissingEmbeddingsAsync(
         string embeddingModel,
         CancellationToken cancellationToken);

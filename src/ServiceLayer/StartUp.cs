@@ -32,6 +32,7 @@ namespace Fistix.TaskManager.ServiceLayer
       services.AddSingleton<IEmbeddingQueue, EmbeddingQueue>();
       services.AddScoped<IEmbeddingProcessor, EmbeddingProcessor>();
       services.AddScoped<IVectorStore, PgVectorEmbeddingStore>();
+      services.AddScoped<ILexicalTodoSearch, PostgresLexicalTodoSearch>();
       services.AddHostedService<EmbeddingBackgroundService>();
 
       services.AddScoped<IAiBatchStepExecutor, AiBatchStepExecutor>();

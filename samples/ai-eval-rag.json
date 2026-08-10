@@ -3,6 +3,7 @@
     "id": "empty-corpus",
     "question": "What tasks mention inventing todos that do not exist?",
     "expectedSourceTitles": [],
+    "forbiddenTitles": [],
     "expectInsufficient": true,
     "notes": "When retrieval returns nothing, answer must refuse."
   },
@@ -13,8 +14,13 @@
       "Stripe webhook timeouts under load",
       "Fix payment webhook timeout"
     ],
+    "forbiddenTitles": [
+      "Tool calling rename task",
+      "Update invoice webhook task title",
+      "Add retry for failed payment webhooks"
+    ],
     "expectInsufficient": false,
-    "notes": "Near-duplicate wording for recall@k."
+    "notes": "Near-duplicate wording for recall@k; precision must drop meta/retry neighbors."
   },
   {
     "id": "auth-paraphrase",
@@ -23,13 +29,64 @@
       "Login failures after Auth0 tenant change",
       "Auth0 login loop after cookie change"
     ],
+    "forbiddenTitles": [
+      "Stripe webhook timeouts under load",
+      "Unrelated noise: office plants"
+    ],
     "expectInsufficient": false,
     "notes": "Paraphrase retrieval."
+  },
+  {
+    "id": "jwt-login-outage",
+    "question": "Tasks about JWT / login outage",
+    "expectedSourceTitles": [
+      "Prod auth outage – users cannot login"
+    ],
+    "forbiddenTitles": [
+      "Tool calling rename task",
+      "Fix payment webhook timeout",
+      "Add retry for failed payment webhooks"
+    ],
+    "expectInsufficient": false,
+    "notes": "Must not dump payment neighborhood."
+  },
+  {
+    "id": "auth0-high-last-month",
+    "question": "high priority Auth0 last month?",
+    "expectedSourceTitles": [
+      "Auth0 login loop after cookie change",
+      "Login failures after Auth0 tenant change",
+      "Prod auth outage – users cannot login"
+    ],
+    "forbiddenTitles": [
+      "Overdue high security patch",
+      "Stripe webhook timeouts under load",
+      "Invoice PDF generation OOM"
+    ],
+    "expectInsufficient": false,
+    "notes": "Temporal July + High in code; topic Auth0 via search/LLM. Soft-ok: Cannot refresh access token silently."
+  },
+  {
+    "id": "auth-payments-next",
+    "question": "What should I work on for Auth and Payments next?",
+    "expectedSourceTitles": [
+      "Login failures after Auth0 tenant change",
+      "Stripe webhook timeouts under load",
+      "Fix payment webhook timeout"
+    ],
+    "forbiddenTitles": [
+      "Sprint capacity for Q3 planning",
+      "Unrelated noise: office plants",
+      "Unrelated noise: lunch order"
+    ],
+    "expectInsufficient": false,
+    "notes": "Advice: fair per-topic quota merge + meta filter + High/due sort; Sources=retrieval shortlist; LLM covers each named domain."
   },
   {
     "id": "ungrounded-guid",
     "question": "Summarize todo 11111111-1111-1111-1111-111111111111",
     "expectedSourceTitles": [],
+    "forbiddenTitles": [],
     "expectInsufficient": true,
     "notes": "Invented Guid should not be answered as if real."
   }
