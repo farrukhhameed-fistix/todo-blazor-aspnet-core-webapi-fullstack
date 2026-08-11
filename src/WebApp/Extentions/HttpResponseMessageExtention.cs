@@ -16,9 +16,23 @@ namespace Fistix.TaskManager.WebApp.Extentions
 
       if (response.StatusCode == System.Net.HttpStatusCode.BadRequest ||
           response.StatusCode == System.Net.HttpStatusCode.Conflict ||
-          response.StatusCode == System.Net.HttpStatusCode.NotFound)
+          response.StatusCode == System.Net.HttpStatusCode.NotFound ||
+          response.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable)
       {
-        var problemDetails = await response.Content.ReadFromJsonAsync<ProblemDetails>();
+        ProblemDetails? problemDetails = null;
+        try
+        {
+          problemDetails = await response.Content.ReadFromJsonAsync<ProblemDetails>();
+        }
+        catch
+        {
+          problemDetails = null;
+        }
+
+        if (problemDetails is null)
+        {
+          return await response.Content.ReadAsStringAsync();
+        }
 
         if (!String.IsNullOrWhiteSpace(problemDetails.Detail))
         {

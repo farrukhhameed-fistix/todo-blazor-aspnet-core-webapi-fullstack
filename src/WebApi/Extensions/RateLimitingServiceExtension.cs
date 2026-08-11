@@ -47,6 +47,7 @@ public static class RateLimitingServiceExtension
             AddFixedWindowPolicy(options, RateLimitPolicies.AiRag, aiConfig.Features.RagRateLimit);
             AddFixedWindowPolicy(options, RateLimitPolicies.AiFunctionCalling, aiConfig.Features.FunctionCallingRateLimit);
             AddFixedWindowPolicy(options, RateLimitPolicies.AiAgents, aiConfig.Features.AgentsRateLimit);
+            AddFixedWindowPolicy(options, RateLimitPolicies.AiTranscribe, aiConfig.Features.VoiceTranscriptionRateLimit);
         });
 
         return services;

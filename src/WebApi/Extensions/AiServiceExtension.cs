@@ -6,6 +6,7 @@ using Fistix.TaskManager.AiLayer.Implementations;
 using Fistix.TaskManager.AiLayer.Observability;
 using Fistix.TaskManager.AiLayer.Shared;
 using Fistix.TaskManager.AiLayer.Tools;
+using Fistix.TaskManager.WebApi.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -54,6 +55,27 @@ public static class AiServiceExtension
         services.AddScoped<ToolProposalPipeline>();
         services.AddSingleton<TodoManagementPlugin>();
         services.AddHttpClient(nameof(SemanticKernelEmbeddingService));
+        // Strip Aspire's default 30s resilience pipeline — model download can take minutes,
+        // and stacking another StandardResilienceHandler left the 30s total timeout in place.
+#pragma warning disable EXTEXP0001 // RemoveAllResilienceHandlers is experimental
+        services.AddHttpClient("speech-to-text", (sp, client) =>
+        {
+            var aiConfig = sp.GetRequiredService<AiConfiguration>();
+            // Prefer WarmupTimeoutSeconds for this client (covers download + transcribe).
+            var timeoutSeconds = Math.Clamp(
+                aiConfig.SpeechToText.WarmupTimeoutSeconds > 0
+                    ? aiConfig.SpeechToText.WarmupTimeoutSeconds
+                    : Math.Max(aiConfig.SpeechToText.TimeoutSeconds, 600),
+                60,
+                1800);
+            client.Timeout = TimeSpan.FromSeconds(timeoutSeconds);
+        })
+        .RemoveAllResilienceHandlers();
+#pragma warning restore EXTEXP0001
+        services.AddSingleton<OpenAiCompatibleSpeechToTextService>();
+        services.AddSingleton<ISpeechToTextService>(sp => sp.GetRequiredService<OpenAiCompatibleSpeechToTextService>());
+        services.AddSingleton<ISpeechToTextModelWarmup>(sp => sp.GetRequiredService<OpenAiCompatibleSpeechToTextService>());
+        services.AddHostedService<SpeechToTextWarmupHostedService>();
 
         var embeddingProvider = configuration["Ai:Embedding:Provider"] ?? "Onnx";
         if (string.Equals(embeddingProvider, "onnx", StringComparison.OrdinalIgnoreCase))

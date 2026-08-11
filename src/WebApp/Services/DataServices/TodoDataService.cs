@@ -220,6 +220,36 @@ namespace Fistix.TaskManager.WebApp.Services.DataServices
       return result;
     }
 
+    public async Task<ApiCallResult<TranscribeAudioResponseDto>> TranscribeAudio(
+      Stream fileStream,
+      string fileName,
+      string contentType)
+    {
+      var result = new ApiCallResult<TranscribeAudioResponseDto>();
+      using var content = new MultipartFormDataContent();
+      var streamContent = new StreamContent(fileStream);
+      if (!string.IsNullOrWhiteSpace(contentType))
+      {
+        streamContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(contentType);
+      }
+
+      content.Add(streamContent, "file", fileName);
+
+      var response = await _httpClient.PostAsync("api/ai/transcribe", content);
+      if (response.IsSuccessStatusCode)
+      {
+        result.Payload = await response.Content.ReadFromJsonAsync<TranscribeAudioResponseDto>();
+        result.IsSucceed = true;
+      }
+      else
+      {
+        result.IsSucceed = false;
+        result.Message = await response.GetErrorMessage();
+      }
+
+      return result;
+    }
+
     public async Task<ApiCallResult<ExecuteAiToolsResponseDto>> ExecuteAiTools(List<ProposedToolCallDto> confirmedCalls)
     {
       var result = new ApiCallResult<ExecuteAiToolsResponseDto>();
