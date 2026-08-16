@@ -45,9 +45,13 @@ public sealed class ToolProposalPipeline
         {
             var sanitizedPrompt = PromptInputSanitizer.SanitizeAndTruncate(request.Prompt, 2000);
 
+            var todayDate = DateTime.UtcNow.Date;
+            var today = todayDate.ToString("yyyy-MM-dd");
+            var todayWeekday = todayDate.DayOfWeek.ToString();
             var systemPrompt = $$"""
                 You are a task-management function-calling assistant.
                 Given the user request, propose zero or more tool calls. Do NOT execute anything.
+                Today (UTC) is {{today}} ({{todayWeekday}}).
                 {{TodoToolDefinitions.BuildCatalogForPrompt()}}
 
                 Respond with ONLY valid JSON in this shape:
@@ -65,7 +69,27 @@ public sealed class ToolProposalPipeline
                 - Use only the listed tool names.
                 - Prefer the fewest calls that satisfy the request.
                 - If the request cannot be mapped to tools, return an empty calls array and explain why.
-                - For ids use GUID strings when the user provided them.
+                - Prefer index (1-based visible grid row) over id. Do not invent GUIDs when the user said a row number.
+                - Prefer one-shot update_todo / mark_complete / set_priority over open→edit→save unless Current open task (edit) is provided.
+                - For search_todos: put topic words in query; map status words to status; map relative dates to dueFrom/dueTo using Today. "show all my tasks" / "clear search" / "reset filters" -> search_todos with no query/status/dueFrom/dueTo.
+                - Prefer semantic:true when the user asks about a topic in natural language (e.g. "regarding stripe").
+                - delete/remove/done → mark_complete (no hard delete).
+                - If Current open task context is provided and the user says this/it/the task without a number, omit index and omit id.
+                - When Current open task (edit) is provided, map spoken title, description, due date, and/or priority to update_todo or set_priority (omit index/id). Do not call save_edit unless the user asked to save.
+                - For create_todo/update_todo dueDate: resolve relative phrases from Today. "next Sunday" / "coming Sunday" = the next Sunday strictly after today (never invent a mid-week date). "tomorrow" = Today+1. Use YYYY-MM-DD.
+                - Short command phrases should map to UI tools:
+                  - "edit it", "start edit" -> start_edit
+                  - "save it", "save changes" -> save_edit
+                  - "close it", "cancel" -> close_todo or cancel_edit based on open/edit context
+                  - "regenerate the priority" / "read the priority" -> regenerate_priority
+                  - "regenerate the summary" / "regenerate the sunday of this task" -> regenerate_summary
+                  - "set the priority to medium/high/low" -> set_priority or update_todo with priority
+                  - "set due date last friday" / "sunday last friday" -> update_todo with dueDate for last Friday
+                  - "set the title/description to …" -> update_todo with that field
+                  - "show all my tasks" / "list all tasks" / "clear search" -> search_todos with empty arguments
+                - Treat likely STT slips conservatively. Example: if edit context is open and transcript says "added", prefer edit intent.
+                - Prefer "summary" over "sunday" when the user asks to regenerate something of a task.
+                - Prefer "due date" over a stray weekday when another weekday already appears (e.g. "sunday last friday").
                 """;
 
             var fullPrompt = $"""
@@ -103,6 +127,9 @@ public sealed class ToolProposalPipeline
                     Arguments = args
                 });
             }
+
+            // Deterministic correction: LLM often mis-dates "coming Sunday".
+            RelativeDueDateResolver.ApplyToProposedCalls(sanitizedPrompt, allowedCalls, todayDate);
 
             operation.Activity?.SetTag(AiTelemetryNames.Tags.PromptVersion, AiPromptVersions.ProposeTools);
             operation.SetOutcome(AiTelemetryNames.Outcomes.Success);

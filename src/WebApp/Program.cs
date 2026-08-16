@@ -50,6 +50,7 @@ namespace Fistix.TaskManager.WebApp
       services.AddScoped<ClassificationHubService>();
       services.AddScoped<AiBatchHubService>();
       services.AddScoped<SprintOptimizerHubService>();
+      services.AddScoped<VoiceTranscribeHubService>();
       services.AddScoped<ThemeService>();
     }
   }

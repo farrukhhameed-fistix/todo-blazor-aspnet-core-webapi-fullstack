@@ -95,6 +95,15 @@ public sealed class ToolExecutor : IToolExecutor
                     TodoToolDefinitions.SetPriority => await ExecuteSetPriorityAsync(call.Arguments, cancellationToken),
                     TodoToolDefinitions.SearchTodos => await ExecuteSearchAsync(call.Arguments, cancellationToken),
                     TodoToolDefinitions.GetStatistics => await ExecuteStatisticsAsync(cancellationToken),
+                    TodoToolDefinitions.SetSemanticSearch => ExecuteSetSemanticSearch(call.Arguments),
+                    TodoToolDefinitions.OpenTodo => ExecuteUiNoOp(TodoToolDefinitions.OpenTodo, "Open todo details in the UI."),
+                    TodoToolDefinitions.CloseTodo => ExecuteUiNoOp(TodoToolDefinitions.CloseTodo, "Close todo dialog in the UI."),
+                    TodoToolDefinitions.StartEdit => ExecuteUiNoOp(TodoToolDefinitions.StartEdit, "Open edit dialog in the UI."),
+                    TodoToolDefinitions.CancelEdit => ExecuteUiNoOp(TodoToolDefinitions.CancelEdit, "Cancel edit dialog in the UI."),
+                    TodoToolDefinitions.SaveEdit => ExecuteUiNoOp(TodoToolDefinitions.SaveEdit, "Save edit applied in the UI."),
+                    TodoToolDefinitions.RegenerateSummary => ExecuteUiNoOp(TodoToolDefinitions.RegenerateSummary, "Regenerate summary in the UI."),
+                    TodoToolDefinitions.RegeneratePriority => ExecuteUiNoOp(TodoToolDefinitions.RegeneratePriority, "Regenerate priority suggestion in the UI."),
+                    TodoToolDefinitions.ApplySuggestedPriority => ExecuteUiNoOp(TodoToolDefinitions.ApplySuggestedPriority, "Apply suggested priority in the UI."),
                     _ => throw new InvalidOperationException($"Tool '{toolName}' is not implemented.")
                 };
 
@@ -272,42 +281,178 @@ public sealed class ToolExecutor : IToolExecutor
         Dictionary<string, JsonElement> args,
         CancellationToken cancellationToken)
     {
-        var query = RequireString(args, "query");
+        var query = GetString(args, "query")?.Trim() ?? string.Empty;
         if (query.Length > LlmInputLimits.ToolSearchQueryMaxLength)
         {
             query = query[..LlmInputLimits.ToolSearchQueryMaxLength];
         }
 
-        var isAdmin = _currentUserService.HasAdminProfile;
-        var userId = TodoAccessGuard.RequireCurrentUserId(_currentUserService);
+        var statusFilter = GetString(args, "status");
+        if (!string.IsNullOrWhiteSpace(statusFilter))
+        {
+            statusFilter = ToolArgumentValidator.NormalizeStatus(statusFilter);
+        }
 
-        var todos = isAdmin
-            ? await _todoTaskRepository.GetAll(cancellationToken)
-            : await _todoTaskRepository.GetByOwner(userId, cancellationToken);
+        var dueFrom = GetDateOnly(args, "dueFrom");
+        var dueTo = GetDateOnly(args, "dueTo");
 
-        var matches = todos
-            .Where(t =>
-                (t.Title?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                (t.Description?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false))
-            .Take(20)
-            .Select(t => new
+        var useSemantic = GetBool(args, "semantic") == true && !string.IsNullOrWhiteSpace(query);
+        if (useSemantic)
+        {
+            var semanticResult = await _mediator.Send(new SemanticSearchTodosCommand
             {
-                t.ExternalId,
-                t.Title,
-                t.Priority,
-                t.Status,
-                t.DueDate
-            })
-            .ToList();
+                Query = query,
+                Limit = 50
+            }, cancellationToken);
 
+            var hits = (semanticResult.Payload?.Results ?? [])
+                .Where(h => MatchesStatus(h.Status, statusFilter))
+                .ToList();
+
+            // Semantic hits lack due dates — refine against owned todos when date filters present.
+            if (dueFrom is not null || dueTo is not null)
+            {
+                var isAdmin = _currentUserService.HasAdminProfile;
+                var userId = TodoAccessGuard.RequireCurrentUserId(_currentUserService);
+                var todos = isAdmin
+                    ? await _todoTaskRepository.GetAll(cancellationToken)
+                    : await _todoTaskRepository.GetByOwner(userId, cancellationToken);
+                var byId = todos.ToDictionary(t => t.ExternalId);
+                hits = hits
+                    .Where(h => byId.TryGetValue(h.TodoExternalId, out var todo) && MatchesDueDate(todo.DueDate, dueFrom, dueTo))
+                    .ToList();
+            }
+
+            hits = hits.Take(20).ToList();
+
+            return new ToolExecutionOutcome
+            {
+                ToolName = TodoToolDefinitions.SearchTodos,
+                Success = true,
+                Message = $"Found {hits.Count} matching todo(s) via semantic search.",
+                ResultJson = JsonSerializer.Serialize(hits.Select(h => new
+                {
+                    h.TodoExternalId,
+                    h.Title,
+                    h.Priority,
+                    h.Status,
+                    h.Similarity,
+                    Semantic = true
+                }), JsonOptions)
+            };
+        }
+
+        {
+            var isAdmin = _currentUserService.HasAdminProfile;
+            var userId = TodoAccessGuard.RequireCurrentUserId(_currentUserService);
+
+            var todos = isAdmin
+                ? await _todoTaskRepository.GetAll(cancellationToken)
+                : await _todoTaskRepository.GetByOwner(userId, cancellationToken);
+
+            var matches = todos
+                .Where(t =>
+                    (string.IsNullOrWhiteSpace(query)
+                        || (t.Title?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
+                        || (t.Description?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false))
+                    && MatchesStatus(t.Status, statusFilter)
+                    && MatchesDueDate(t.DueDate, dueFrom, dueTo))
+                .Take(20)
+                .Select(t => new
+                {
+                    t.ExternalId,
+                    t.Title,
+                    t.Priority,
+                    t.Status,
+                    t.DueDate,
+                    Semantic = false
+                })
+                .ToList();
+
+            return new ToolExecutionOutcome
+            {
+                ToolName = TodoToolDefinitions.SearchTodos,
+                Success = true,
+                Message = $"Found {matches.Count} matching todo(s).",
+                ResultJson = JsonSerializer.Serialize(matches, JsonOptions)
+            };
+        }
+    }
+
+    private static bool MatchesStatus(string? status, string? statusFilter)
+    {
+        if (string.IsNullOrWhiteSpace(statusFilter))
+        {
+            return true;
+        }
+
+        return string.Equals(status, statusFilter, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool MatchesDueDate(DateTime? dueDate, DateTime? dueFrom, DateTime? dueTo)
+    {
+        if (dueFrom is null && dueTo is null)
+        {
+            return true;
+        }
+
+        if (dueDate is null)
+        {
+            return false;
+        }
+
+        var due = dueDate.Value.Date;
+        if (dueFrom is not null && due < dueFrom.Value.Date)
+        {
+            return false;
+        }
+
+        if (dueTo is not null && due > dueTo.Value.Date)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static DateTime? GetDateOnly(Dictionary<string, JsonElement> args, string name)
+    {
+        var raw = GetString(args, name);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        if (!DateTime.TryParse(raw, out var parsed))
+        {
+            throw new InvalidOperationException($"Argument '{name}' must be a valid date.");
+        }
+
+        return parsed.Date;
+    }
+
+    private static ToolExecutionOutcome ExecuteSetSemanticSearch(Dictionary<string, JsonElement> args)
+    {
+        var enabled = GetBool(args, "enabled") ?? false;
         return new ToolExecutionOutcome
         {
-            ToolName = TodoToolDefinitions.SearchTodos,
+            ToolName = TodoToolDefinitions.SetSemanticSearch,
             Success = true,
-            Message = $"Found {matches.Count} matching todo(s).",
-            ResultJson = JsonSerializer.Serialize(matches, JsonOptions)
+            Message = enabled
+                ? "Semantic search switch will be turned on in the UI."
+                : "Semantic search switch will be turned off in the UI.",
+            ResultJson = JsonSerializer.Serialize(new { enabled }, JsonOptions)
         };
     }
+
+    private static ToolExecutionOutcome ExecuteUiNoOp(string toolName, string message) =>
+        new()
+        {
+            ToolName = toolName,
+            Success = true,
+            Message = message,
+            ResultJson = "{}"
+        };
 
     private async Task<ToolExecutionOutcome> ExecuteStatisticsAsync(CancellationToken cancellationToken)
     {
@@ -414,6 +559,22 @@ public sealed class ToolExecutor : IToolExecutor
         return parsed.Kind == DateTimeKind.Unspecified
             ? DateTime.SpecifyKind(parsed, DateTimeKind.Utc)
             : parsed.ToUniversalTime();
+    }
+
+    private static bool? GetBool(Dictionary<string, JsonElement> args, string name)
+    {
+        if (!TryGetArg(args, name, out var element))
+        {
+            return null;
+        }
+
+        return element.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.String when bool.TryParse(element.GetString(), out var parsed) => parsed,
+            _ => null
+        };
     }
 
     private static bool TryGetArg(Dictionary<string, JsonElement> args, string name, out JsonElement element)

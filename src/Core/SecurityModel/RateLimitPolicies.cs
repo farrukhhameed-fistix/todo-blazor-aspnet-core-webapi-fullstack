@@ -8,4 +8,5 @@ public static class RateLimitPolicies
     public const string AiRag = "ai-rag";
     public const string AiFunctionCalling = "ai-function-calling";
     public const string AiAgents = "ai-agents";
+    public const string AiTranscribe = "ai-transcribe";
 }

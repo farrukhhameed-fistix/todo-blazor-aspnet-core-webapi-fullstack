@@ -1,6 +1,5 @@
 using Fistix.TaskManager.ViewModel.Commands.Todos;
 using FluentValidation;
-using System;
 
 namespace Fistix.TaskManager.ViewModel.Validators.Todos;
 
@@ -15,10 +14,8 @@ public class UpdateTodoTaskCommandValidator : AbstractValidator<UpdateTodoTaskCo
         RuleFor(x => x.Description)
             .NotEmpty()
             .MaximumLength(TodoFieldLimits.DescriptionMaxLength);
-        RuleFor(x => x.DueDate)
-            .NotEmpty()
-            .GreaterThan(DateTime.Now)
-            .WithMessage("Due Date should be future date");
+        // Updates may keep or set past/today due dates (overdue edits, unchanged fields).
+        RuleFor(x => x.DueDate).NotEmpty();
         RuleFor(x => x.Priority)
             .NotEmpty()
             .Must(p => p is "High" or "Medium" or "Low")

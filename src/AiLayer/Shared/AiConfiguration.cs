@@ -14,8 +14,65 @@ public class AiConfiguration
     public ClaudeSettings Claude { get; set; } = new();
     public EmbeddingSettings Embedding { get; set; } = new();
     public AgentsSettings Agents { get; set; } = new();
+    public SpeechToTextSettings SpeechToText { get; set; } = new();
     public AiFeaturesConfiguration Features { get; set; } = new();
     public AiObservabilitySettings Observability { get; set; } = new();
+}
+
+/// <summary>
+/// Local OpenAI-compatible STT sidecar (e.g. Speaches / faster-whisper).
+/// Endpoint is the service base URL without a trailing slash (e.g. http://localhost:8000).
+/// </summary>
+public class SpeechToTextSettings
+{
+    public string Endpoint { get; set; } = "";
+
+    /// <summary>Model id sent to /v1/audio/transcriptions (sidecar-specific).</summary>
+    public string Model { get; set; } = "Systran/faster-whisper-tiny";
+
+    /// <summary>
+    /// Optional domain hint passed to STT service to improve transcription of project-specific terms.
+    /// </summary>
+    public string VocabularyPrompt { get; set; } = "";
+
+    public int TimeoutSeconds { get; set; } = 60;
+
+    /// <summary>
+    /// HttpClient timeout for STT (includes first-run model download). Default 10 minutes.
+    /// </summary>
+    public int WarmupTimeoutSeconds { get; set; } = 600;
+
+    /// <summary>Max uploaded audio size in bytes (default 5 MiB).</summary>
+    public int MaxAudioBytes { get; set; } = 5 * 1024 * 1024;
+
+    /// <summary>
+    /// When true, the client streams PCM batches and the hub runs one-in-flight Whisper for local live captions.
+    /// Skips browser Web Speech. Default false uses WebM + Web Speech.
+    /// </summary>
+    public bool EnableLocalLiveCaptions { get; set; }
+
+    /// <summary>ISO-639-1 hint sent to Speaches (empty = let the model detect).</summary>
+    public string DecodeLanguage { get; set; } = "en";
+
+    /// <summary>Target PCM sample rate when local live captions are enabled.</summary>
+    public int PcmSampleRate { get; set; } = 16000;
+
+    /// <summary>How often the browser flushes PCM to the hub (200–400 ms).</summary>
+    public int LiveCaptionBatchMs { get; set; } = 300;
+
+    public string[] AllowedContentTypes { get; set; } =
+    [
+        "audio/webm",
+        "audio/pcm",
+        "audio/l16",
+        "audio/wav",
+        "audio/x-wav",
+        "audio/mpeg",
+        "audio/mp4",
+        "audio/ogg",
+        "audio/flac",
+        "application/octet-stream"
+    ];
 }
 
 /// <summary>
@@ -143,6 +200,8 @@ public class AiFeaturesConfiguration
     public AiRateLimitConfiguration FunctionCallingRateLimit { get; set; } = new();
     public bool EnableAgents { get; set; } = false;
     public AiRateLimitConfiguration AgentsRateLimit { get; set; } = new();
+    public bool EnableVoiceTranscription { get; set; } = false;
+    public AiRateLimitConfiguration VoiceTranscriptionRateLimit { get; set; } = new();
     public bool EnableMcp { get; set; } = false;
 
     public AiBatchConfiguration Batch { get; set; } = new();

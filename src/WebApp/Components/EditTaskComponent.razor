@@ -1,5 +1,7 @@
 @using Fistix.TaskManager.ViewModel.Commands.Todos
 @using Fistix.TaskManager.ViewModel.Dtos
+@using Fistix.TaskManager.ViewModel.Validators.Todos
+@using Fistix.TaskManager.WebApp.Models
 @using FluentValidation
 
 <MudStack Spacing="3">
@@ -65,6 +67,8 @@
     private UpdateTodoTaskCommand Command { get; set; } = new();
     private DateTime? _dueDate;
     private Dictionary<string, string> _errors = new();
+    private Guid _hydratedTaskId;
+    private bool _hydrated;
 
     [Parameter]
     public TodoTaskDto Task { get; set; } = new();
@@ -77,6 +81,16 @@
 
     protected override void OnParametersSet()
     {
+        if (_hydrated && _hydratedTaskId == Task.ExternalId)
+        {
+            return;
+        }
+
+        HydrateFromTask();
+    }
+
+    private void HydrateFromTask()
+    {
         Command = new UpdateTodoTaskCommand
         {
             ExternalId = Task.ExternalId,
@@ -86,6 +100,8 @@
             Priority = NormalizeDisplayPriority(Task.Priority)
         };
         _dueDate = Command.DueDate;
+        _hydratedTaskId = Task.ExternalId;
+        _hydrated = true;
         _errors.Clear();
     }
 
@@ -131,4 +147,63 @@
     private async Task HandleCancel() => await OnCancel.InvokeAsync();
 
     private void OnDueDateChanged(DateTime? date) => _dueDate = date;
+
+    /// <summary>Voice / programmatic save of the current edit form.</summary>
+    public Task SubmitAsync() => HandleSubmit();
+
+    /// <summary>Voice / programmatic cancel.</summary>
+    public Task CancelAsync() => HandleCancel();
+
+    /// <summary>Applies spoken field values to the open form without saving.</summary>
+    public bool ApplyVoicePatch(VoiceEditFormFieldPatch patch)
+    {
+        if (patch.ApplySuggestedPriority)
+        {
+            if (string.IsNullOrWhiteSpace(Task.AiSuggestedPriority))
+            {
+                return false;
+            }
+
+            Command.Priority = NormalizeDisplayPriority(Task.AiSuggestedPriority);
+            StateHasChanged();
+            return true;
+        }
+
+        var changed = false;
+        if (!string.IsNullOrWhiteSpace(patch.Title))
+        {
+            Command.Title = Truncate(patch.Title, TodoFieldLimits.TitleMaxLength);
+            changed = true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(patch.Description))
+        {
+            Command.Description = Truncate(patch.Description, TodoFieldLimits.DescriptionMaxLength);
+            changed = true;
+        }
+
+        if (patch.DueDate is { } due)
+        {
+            _dueDate = due.Date;
+            Command.DueDate = due.Date;
+            changed = true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(patch.Priority))
+        {
+            Command.Priority = NormalizeDisplayPriority(patch.Priority);
+            changed = true;
+        }
+
+        if (changed)
+        {
+            _errors.Clear();
+            StateHasChanged();
+        }
+
+        return changed;
+    }
+
+    private static string Truncate(string value, int maxLength) =>
+        value.Length <= maxLength ? value : value[..maxLength];
 }

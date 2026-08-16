@@ -1,5 +1,6 @@
-﻿@using Fistix.TaskManager.ViewModel.Dtos
+@using Fistix.TaskManager.ViewModel.Dtos
 @using Fistix.TaskManager.ViewModel.Commands.Todos
+@using Fistix.TaskManager.WebApp.Models
 @using Fistix.TaskManager.WebApp.Services.StateServices
 @using Fistix.TaskManager.WebApp.Services.DataServices
 @inject TodoStateService TodoStateService
@@ -7,7 +8,7 @@
 
 <MudStack Spacing="3" Class="mb-4">
   <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap">
-    <MudTextField @bind-Value="_searchText"
+    <MudTextField @bind-Value="SearchText"
                   Placeholder="Search tasks…"
                   Variant="Variant.Outlined"
                   Adornment="Adornment.Start"
@@ -19,6 +20,23 @@
       Search
     </MudButton>
   </MudStack>
+
+  @if (HasActiveFilters)
+  {
+    <MudStack Row="true" Spacing="1" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap">
+      @if (!string.IsNullOrWhiteSpace(_statusFilter))
+      {
+        <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">Status: @_statusFilter</MudChip>
+      }
+      @if (_dueFromFilter is not null || _dueToFilter is not null)
+      {
+        <MudChip T="string" Size="Size.Small" Color="Color.Info" Variant="Variant.Outlined">
+          Due: @(_dueFromFilter?.ToString("MMM dd") ?? "…") – @(_dueToFilter?.ToString("MMM dd") ?? "…")
+        </MudChip>
+      }
+      <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="ClearFilters">Clear filters</MudButton>
+    </MudStack>
+  }
 
   @if (!string.IsNullOrWhiteSpace(_searchError))
   {
@@ -49,6 +67,7 @@
 
 <MudTable Items="DisplayedTasks" Hover="true" Breakpoint="Breakpoint.Sm" Loading="_searching" Dense="true">
   <HeaderContent>
+    <MudTh Style="width:3rem">#</MudTh>
     <MudTh>Title</MudTh>
     <MudTh>Due</MudTh>
     <MudTh>Status</MudTh>
@@ -56,6 +75,7 @@
     <MudTh Style="text-align:center">Actions</MudTh>
   </HeaderContent>
   <RowTemplate>
+    <MudTd DataLabel="#">@GetRowNumber(context)</MudTd>
     <MudTd DataLabel="Title">@context.Title</MudTd>
     <MudTd DataLabel="Due">@(context.DueDate?.ToString("MMM dd, yyyy") ?? "—")</MudTd>
     <MudTd DataLabel="Status">
@@ -75,6 +95,10 @@
   </NoRecordsContent>
 </MudTable>
 
+<MudText Typo="Typo.caption" Color="Color.Secondary" Class="mt-1 mb-2">
+  Row # is for voice commands on this list (changes after search/filter).
+</MudText>
+
 <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Class="mt-3" OnClick="OnRefreshClick">Refresh</MudButton>
 
 <MudDialog @bind-Visible="_detailsOpen" Options="_dialogOptions">
@@ -84,7 +108,8 @@
   <DialogContent>
     @if (SelectedTask is not null)
     {
-      <TaskDetailsComponent TodoItem="SelectedTask"
+      <TaskDetailsComponent @ref="_detailsRef"
+                            TodoItem="SelectedTask"
                             OnEdit="EditTask"
                             OnClose="CloseTaskDetails"
                             OnTaskUpdated="HandleTaskUpdated" />
@@ -99,7 +124,8 @@
   <DialogContent>
     @if (EditingTask is not null)
     {
-      <EditTaskComponent Task="EditingTask"
+      <EditTaskComponent @ref="_editRef"
+                         Task="EditingTask"
                          OnSubmitForm="SaveEditTask"
                          OnCancel="CloseEditTask" />
     }
@@ -109,6 +135,8 @@
 @code {
   private TodoTaskDto? SelectedTask { get; set; }
   private TodoTaskDto? EditingTask { get; set; }
+  private TaskDetailsComponent? _detailsRef;
+  private EditTaskComponent? _editRef;
   private string _searchText = string.Empty;
   private bool _useSemanticSearch;
   private bool _searching;
@@ -117,6 +145,11 @@
   private string? _searchError;
   private List<SemanticSearchHitDto>? _semanticResults;
   private long _semanticExecutionMs;
+  private string? _statusFilter;
+  private DateTime? _dueFromFilter;
+  private DateTime? _dueToFilter;
+  private HashSet<Guid>? _voiceMatchedIds;
+  private List<TodoTaskDto> _displayedSnapshot = new();
 
   private readonly DialogOptions _dialogOptions = new()
   {
@@ -131,34 +164,429 @@
   [Parameter]
   public EventCallback OnRefresh { get; set; }
 
+  public bool UseSemanticSearch => _useSemanticSearch;
+  public bool IsDetailsOpen => _detailsOpen;
+  public bool IsEditOpen => _editOpen;
+
+  private bool HasActiveFilters =>
+    !string.IsNullOrWhiteSpace(_statusFilter) || _dueFromFilter is not null || _dueToFilter is not null;
+
+  private string SearchText
+  {
+    get => _searchText;
+    set
+    {
+      _searchText = value ?? string.Empty;
+      _voiceMatchedIds = null;
+    }
+  }
+
+  public IReadOnlyList<TodoTaskDto> GetDisplayedTasks()
+  {
+    _displayedSnapshot = DisplayedTasks;
+    return _displayedSnapshot;
+  }
+
+  public bool TryGetByIndex(int index1Based, out TodoTaskDto task)
+  {
+    var list = GetDisplayedTasks();
+    if (index1Based < 1 || index1Based > list.Count)
+    {
+      task = null!;
+      return false;
+    }
+
+    task = list[index1Based - 1];
+    return true;
+  }
+
+  public bool TryGetOpenTask(out TodoTaskDto task, out int? index1Based)
+  {
+    index1Based = null;
+    var open = EditingTask ?? SelectedTask;
+    if (open is null)
+    {
+      task = null!;
+      return false;
+    }
+
+    task = open;
+    var list = GetDisplayedTasks();
+    for (var i = 0; i < list.Count; i++)
+    {
+      if (list[i].ExternalId == open.ExternalId)
+      {
+        index1Based = i + 1;
+        break;
+      }
+    }
+
+    return true;
+  }
+
+  public Fistix.TaskManager.WebApp.Models.VoiceUiContext GetVoiceUiContext()
+  {
+    var ctx = new Fistix.TaskManager.WebApp.Models.VoiceUiContext
+    {
+      DetailsOpen = _detailsOpen,
+      EditOpen = _editOpen
+    };
+
+    if (TryGetOpenTask(out var task, out var index))
+    {
+      ctx.OpenExternalId = task.ExternalId;
+      ctx.OpenTitle = task.Title;
+      ctx.OpenIndex = index;
+    }
+
+    return ctx;
+  }
+
+  public void ShowTaskDetails(TodoTaskDto task)
+  {
+    SelectedTask = task;
+    _detailsOpen = true;
+    StateHasChanged();
+  }
+
+  public bool ShowTaskDetailsByIndex(int index1Based)
+  {
+    if (!TryGetByIndex(index1Based, out var task))
+    {
+      return false;
+    }
+
+    ShowTaskDetails(task);
+    return true;
+  }
+
+  public bool StartEditByIndex(int? index1Based)
+  {
+    TodoTaskDto? task = null;
+    if (index1Based is > 0)
+    {
+      if (!TryGetByIndex(index1Based.Value, out task))
+      {
+        return false;
+      }
+    }
+    else if (!TryGetOpenTask(out task, out _))
+    {
+      return false;
+    }
+
+    EditingTask = task;
+    SelectedTask = task;
+    _detailsOpen = false;
+    _editOpen = true;
+    StateHasChanged();
+    return true;
+  }
+
+  public void CloseDetails()
+  {
+    CloseTaskDetails();
+    StateHasChanged();
+  }
+
+  public void CloseEdit()
+  {
+    CloseEditTask();
+    StateHasChanged();
+  }
+
+  public void CloseAllDialogs()
+  {
+    CloseEditTask();
+    CloseTaskDetails();
+    StateHasChanged();
+  }
+
+  public async Task<(bool Ok, string? Error)> RegenerateSummaryAsync(int? index1Based)
+  {
+    if (!TryResolveTask(index1Based, out var task, out var error))
+    {
+      return (false, error);
+    }
+
+    var result = await TodoDataService.Summarize(task.ExternalId, force: true);
+    if (!result.IsSucceed || result.Payload is null)
+    {
+      return (false, result.Message ?? "Summary failed.");
+    }
+
+    task.AiSummary = result.Payload.Summary;
+    task.AiSummaryModel = result.Payload.Model;
+    task.AiSummaryGeneratedAt = result.Payload.GeneratedAt;
+    TodoStateService.ReplaceTask(task);
+    ShowTaskDetails(task);
+    if (_detailsRef is not null && SelectedTask?.ExternalId == task.ExternalId)
+    {
+      await _detailsRef.VoiceRegenerateSummaryAsync();
+    }
+
+    return (true, null);
+  }
+
+  public async Task<(bool Ok, string? Error)> RegeneratePriorityAsync(int? index1Based)
+  {
+    if (!TryResolveTask(index1Based, out var task, out var error))
+    {
+      return (false, error);
+    }
+
+    var result = await TodoDataService.Classify(task.ExternalId, force: true);
+    if (!result.IsSucceed || result.Payload is null)
+    {
+      return (false, result.Message ?? "Priority suggestion failed.");
+    }
+
+    task.AiSuggestedPriority = result.Payload.SuggestedPriority;
+    task.AiPriorityConfidence = result.Payload.Confidence;
+    task.AiPriorityReason = result.Payload.Reason;
+    task.ClassificationStatus = result.Payload.Status;
+    task.AiPriorityModel = result.Payload.Model;
+    task.AiPriorityGeneratedAt = result.Payload.GeneratedAt;
+    TodoStateService.ReplaceTask(task);
+    ShowTaskDetails(task);
+    return (true, null);
+  }
+
+  public async Task<(bool Ok, string? Error)> ApplySuggestedPriorityAsync(int? index1Based)
+  {
+    if (!TryResolveTask(index1Based, out var task, out var error))
+    {
+      return (false, error);
+    }
+
+    var result = await TodoDataService.ApplyAiPriority(task.ExternalId);
+    if (!result.IsSucceed || result.Payload is null)
+    {
+      return (false, result.Message ?? "Apply priority failed.");
+    }
+
+    TodoStateService.ReplaceTask(result.Payload);
+    if (SelectedTask?.ExternalId == result.Payload.ExternalId)
+    {
+      SelectedTask = result.Payload;
+    }
+
+    if (EditingTask?.ExternalId == result.Payload.ExternalId)
+    {
+      EditingTask = result.Payload;
+    }
+
+    StateHasChanged();
+    return (true, null);
+  }
+
+  public async Task<(bool Ok, string? Error)> SaveEditAsync()
+  {
+    if (!_editOpen || _editRef is null)
+    {
+      return (false, "Edit dialog is not open.");
+    }
+
+    await _editRef.SubmitAsync();
+    return (true, null);
+  }
+
+  public (bool Ok, string? Error) ApplyOpenEditVoiceCall(ProposedToolCallDto call)
+  {
+    if (!_editOpen || _editRef is null)
+    {
+      return (false, "Edit dialog is not open.");
+    }
+
+    var patch = VoiceArgHelper.ParseEditFormPatch(call.ToolName, call.Arguments);
+    if (!patch.HasAnyField)
+    {
+      return (false, "Those spoken fields are not on the edit form.");
+    }
+
+    if (!_editRef.ApplyVoicePatch(patch))
+    {
+      return patch.ApplySuggestedPriority
+        ? (false, "No AI suggested priority is available yet.")
+        : (false, "Could not update the edit form.");
+    }
+
+    StateHasChanged();
+    return (true, null);
+  }
+
+  public void SetSemanticSearchEnabled(bool enabled)
+  {
+    _useSemanticSearch = enabled;
+    if (!enabled)
+    {
+      _semanticResults = null;
+    }
+
+    StateHasChanged();
+  }
+
+  private bool TryResolveTask(int? index1Based, out TodoTaskDto task, out string? error)
+  {
+    error = null;
+    if (index1Based is > 0)
+    {
+      if (TryGetByIndex(index1Based.Value, out task))
+      {
+        return true;
+      }
+
+      error = $"No task at row #{index1Based}.";
+      task = null!;
+      return false;
+    }
+
+    if (TryGetOpenTask(out task, out _))
+    {
+      return true;
+    }
+
+    error = "No open task. Say a row number or open a task first.";
+    task = null!;
+    return false;
+  }
+
+  private int GetRowNumber(TodoTaskDto task)
+  {
+    var list = DisplayedTasks;
+    for (var i = 0; i < list.Count; i++)
+    {
+      if (list[i].ExternalId == task.ExternalId)
+      {
+        return i + 1;
+      }
+    }
+
+    return 0;
+  }
+
+  /// <summary>
+  /// Applies a voice/tool search to the existing grid. When <paramref name="useSemantic"/> is null,
+  /// keeps the current semantic-search switch value.
+  /// Semantic mode uses the same API path as the Search button (not execute-tools match IDs).
+  /// </summary>
+  public async Task ApplySearchAsync(
+    string? query,
+    bool? useSemantic = null,
+    string? status = null,
+    DateTime? dueFrom = null,
+    DateTime? dueTo = null,
+    IReadOnlyCollection<Guid>? matchedIds = null)
+  {
+    _searchText = query?.Trim() ?? string.Empty;
+    _searchError = null;
+    _semanticResults = null;
+    _statusFilter = string.IsNullOrWhiteSpace(status) ? null : status.Trim();
+    _dueFromFilter = dueFrom?.Date;
+    _dueToFilter = dueTo?.Date;
+    _voiceMatchedIds = null;
+
+    if (useSemantic.HasValue)
+    {
+      _useSemanticSearch = useSemantic.Value;
+    }
+
+    // Same path as toggling Semantic search + clicking Search.
+    if (_useSemanticSearch && !string.IsNullOrWhiteSpace(_searchText))
+    {
+      await RunSearch();
+      return;
+    }
+
+    // Lexical / filtered search: prefer authoritative IDs from tool execution when present.
+    if (matchedIds is not null)
+    {
+      _voiceMatchedIds = matchedIds.ToHashSet();
+      await InvokeAsync(StateHasChanged);
+      return;
+    }
+
+    await InvokeAsync(StateHasChanged);
+  }
+
+  public void ClearSearch()
+  {
+    _searchText = string.Empty;
+    _semanticResults = null;
+    _searchError = null;
+    ClearFilters();
+  }
+
+  private void ClearFilters()
+  {
+    _statusFilter = null;
+    _dueFromFilter = null;
+    _dueToFilter = null;
+    _voiceMatchedIds = null;
+    StateHasChanged();
+  }
+
   private List<TodoTaskDto> DisplayedTasks
   {
     get
     {
-      if (_useSemanticSearch && _semanticResults is { Count: > 0 })
+      IEnumerable<TodoTaskDto> source = Tasks;
+
+      if (_voiceMatchedIds is not null)
       {
+        return source.Where(t => _voiceMatchedIds.Contains(t.ExternalId)).ToList();
+      }
+
+      if (_useSemanticSearch)
+      {
+        if (_semanticResults is null)
+        {
+          return ApplyMetadataFilters(source).ToList();
+        }
+
         var ids = _semanticResults.Select(r => r.TodoExternalId).ToHashSet();
-        return Tasks.Where(t => ids.Contains(t.ExternalId)).ToList();
+        source = source.Where(t => ids.Contains(t.ExternalId));
+        return ApplyMetadataFilters(source).ToList();
       }
 
-      if (string.IsNullOrWhiteSpace(_searchText) || _useSemanticSearch)
+      if (!string.IsNullOrWhiteSpace(_searchText))
       {
-        return Tasks;
+        var term = _searchText.Trim();
+        source = source.Where(t =>
+          (t.Title?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
+          (t.Description?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false));
       }
 
-      var term = _searchText.Trim();
-      return Tasks
-        .Where(t =>
-          (t.Title?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false) ||
-          (t.Description?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false))
-        .ToList();
+      return ApplyMetadataFilters(source).ToList();
     }
+  }
+
+  private IEnumerable<TodoTaskDto> ApplyMetadataFilters(IEnumerable<TodoTaskDto> source)
+  {
+    if (!string.IsNullOrWhiteSpace(_statusFilter))
+    {
+      source = source.Where(t =>
+        string.Equals(t.Status.ToString(), _statusFilter, StringComparison.OrdinalIgnoreCase));
+    }
+
+    if (_dueFromFilter is not null)
+    {
+      source = source.Where(t => t.DueDate is not null && t.DueDate.Value.Date >= _dueFromFilter.Value);
+    }
+
+    if (_dueToFilter is not null)
+    {
+      source = source.Where(t => t.DueDate is not null && t.DueDate.Value.Date <= _dueToFilter.Value);
+    }
+
+    return source;
   }
 
   private async Task RunSearch()
   {
     _searchError = null;
     _semanticResults = null;
+    _voiceMatchedIds = null;
 
     if (!_useSemanticSearch)
     {
@@ -196,12 +624,6 @@
     {
       _ = OnRefresh.InvokeAsync();
     }
-  }
-
-  private void ShowTaskDetails(TodoTaskDto task)
-  {
-    SelectedTask = task;
-    _detailsOpen = true;
   }
 
   private void CloseTaskDetails()

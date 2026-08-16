@@ -1,0 +1,876 @@
+@using System.Text.Json
+@using Fistix.TaskManager.ViewModel.Commands.Todos
+@using Fistix.TaskManager.ViewModel.Queries.Todos
+@using Fistix.TaskManager.WebApp.Models
+@using Fistix.TaskManager.WebApp.Services
+@using Fistix.TaskManager.WebApp.Services.DataServices
+@using Microsoft.JSInterop
+@implements IAsyncDisposable
+@inject IJSRuntime Js
+@inject TodoDataService TodoDataService
+@inject VoiceTranscribeHubService VoiceHub
+
+<div class="voice-dock">
+  <MudStack Spacing="2" AlignItems="AlignItems.End">
+    @if (!string.IsNullOrWhiteSpace(_error))
+    {
+      <MudAlert Severity="MudBlazor.Severity.Warning" Dense="true" Class="mb-0" Style="min-width: 16rem;">@_error</MudAlert>
+    }
+
+    @if (_pendingConfirmation is { Count: > 0 })
+    {
+      <MudPaper Class="pa-3" Elevation="8" Style="min-width: 18rem; width: 100%;">
+        @RenderConfirmPanel()
+      </MudPaper>
+    }
+
+    @if (_execution is not null)
+    {
+      <MudPaper Class="pa-3" Elevation="8" Style="min-width: 18rem; width: 100%;">
+        @RenderResultsPanel()
+      </MudPaper>
+    }
+
+    <MudPaper Class="pa-3" Elevation="8">
+      <MudStack Spacing="1" AlignItems="AlignItems.Center">
+        <button type="button"
+                @ref="_holdButton"
+                class="mud-button-root voice-ptt-button @(_recording ? "is-recording" : null)"
+                disabled="@(_busy && !_recording)"
+                aria-pressed="@_recording"
+                title="Hold to speak, release to stop"
+                @onpointerdown="OnPointerDown"
+                @onpointerup="OnPointerUp"
+                @onpointercancel="OnPointerUp"
+                @onlostpointercapture="OnLostPointerCapture"
+                @oncontextmenu:preventDefault>
+          <span class="mud-button-label">
+            <MudIcon Icon="@(_recording ? Icons.Material.Filled.GraphicEq : Icons.Material.Filled.Mic)" Class="mr-2" />
+            @(_recording ? "Release to stop" : (_busy ? "Working…" : "Hold to dictate"))
+          </span>
+        </button>
+
+        <div class="voice-ptt-status">
+          @if (_busy || _recording || !string.IsNullOrWhiteSpace(_status))
+          {
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+              @if (_busy || _recording)
+              {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+              }
+              <MudText Typo="Typo.caption">@_status</MudText>
+              @if (_recording || _busy)
+              {
+                <MudButton Variant="Variant.Text"
+                           Color="Color.Error"
+                           Size="Size.Small"
+                           OnClick="CancelVoiceAsync">
+                  Cancel
+                </MudButton>
+              }
+            </MudStack>
+          }
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(HeardText))
+        {
+          <MudText Typo="Typo.caption" Class="mud-text-secondary" Style="max-width: 22rem; text-align: center;">
+            @HeardLabel: @HeardText
+          </MudText>
+        }
+      </MudStack>
+    </MudPaper>
+  </MudStack>
+</div>
+
+@code {
+  [Parameter]
+  public EventCallback<VoiceCommandAppliedArgs> OnToolsExecuted { get; set; }
+
+  [Parameter]
+  public Func<VoiceUiContext>? GetUiContext { get; set; }
+
+  [Parameter]
+  public Func<List<ProposedToolCallDto>, VoiceResolveResult>? ResolveCalls { get; set; }
+
+  private ElementReference _holdButton;
+  private DotNetObjectReference<VoiceTodoCommandComponent>? _jsRef;
+  private bool _jsAttached;
+  private bool _holdActive;
+  private bool _starting;
+  private bool _finishing;
+  private bool _recording;
+  private DateTimeOffset _recordingStartedAt;
+  private bool _busy;
+  private bool _cancelled;
+  private CancellationTokenSource? _operationCts;
+  private VoiceTranscriptionOptionsDto _voiceOptions = new();
+  private string? _status;
+  private string? _error;
+  private string? _liveTranscript;
+  private string? _liveFinals;
+  private bool _liveHasInterim;
+  private string? _whisperPartial;
+  private string? _transcript;
+  private string? _pendingExplanation;
+  private List<ProposedToolCallDto>? _pendingConfirmation;
+  private Dictionary<string, string> _labels = new(StringComparer.OrdinalIgnoreCase);
+  private ExecuteAiToolsResponseDto? _execution;
+
+  private string? HeardText =>
+    !string.IsNullOrWhiteSpace(_transcript) ? _transcript
+    : !string.IsNullOrWhiteSpace(_whisperPartial) ? _whisperPartial
+    : _liveTranscript;
+
+  private string HeardLabel =>
+    !string.IsNullOrWhiteSpace(_transcript) ? "Heard"
+    : !string.IsNullOrWhiteSpace(_whisperPartial) ? "Heard (partial)"
+    : "Heard (live)";
+
+  protected override void OnInitialized()
+  {
+    VoiceHub.PartialTranscript += OnHubPartialTranscript;
+  }
+
+  protected override async Task OnAfterRenderAsync(bool firstRender)
+  {
+    if (!firstRender || _jsAttached)
+    {
+      return;
+    }
+
+    _jsRef = DotNetObjectReference.Create(this);
+    await Js.InvokeVoidAsync("voiceInterop.attach", _jsRef);
+    _jsAttached = true;
+    _ = VoiceHub.WarmupAsync();
+    try
+    {
+      var options = await TodoDataService.GetVoiceTranscriptionOptions();
+      if (options.IsSucceed && options.Payload is not null)
+      {
+        _voiceOptions = options.Payload;
+      }
+    }
+    catch
+    {
+      // Default WebM + Web Speech.
+    }
+  }
+
+  private RenderFragment RenderConfirmPanel() => __builder =>
+  {
+    <MudText Typo="Typo.subtitle2" Class="mb-1">Confirm changes</MudText>
+    @if (!string.IsNullOrWhiteSpace(_pendingExplanation))
+    {
+      <MudText Typo="Typo.body2" Class="mb-2">@_pendingExplanation</MudText>
+    }
+
+    @foreach (var call in _pendingConfirmation!)
+    {
+      <MudPaper Class="pa-2 mb-2" Outlined="true">
+        @if (_labels.TryGetValue(GetCallKey(call), out var label))
+        {
+          <MudText Typo="Typo.subtitle2">@label</MudText>
+        }
+        <MudText Typo="Typo.body2"><code>@call.ToolName</code></MudText>
+        <MudText Typo="Typo.caption" Style="white-space: pre-wrap; font-family: monospace;">@FormatArgs(call.Arguments)</MudText>
+      </MudPaper>
+    }
+
+    <MudStack Row="true" Spacing="2" Class="mt-2">
+      <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Small" Disabled="@_busy" OnClick="ConfirmMutationsAsync">
+        Confirm &amp; execute
+      </MudButton>
+      <MudButton Variant="Variant.Outlined" Size="Size.Small" Disabled="@_busy" OnClick="ClearPendingConfirmation">Cancel</MudButton>
+    </MudStack>
+  };
+
+  private RenderFragment RenderResultsPanel() => __builder =>
+  {
+    <MudText Typo="Typo.subtitle2" Class="mb-2">Execution results</MudText>
+    @foreach (var result in _execution!.Results)
+    {
+      <MudPaper Class="pa-2 mb-2" Outlined="true">
+        <MudChip T="string" Size="Size.Small" Color="@(result.Success ? Color.Success : Color.Error)">
+          @(result.Success ? "ok" : "failed")
+        </MudChip>
+        <code class="ml-2">@result.ToolName</code>
+        <MudText Typo="Typo.body2" Class="mt-1">@result.Message</MudText>
+      </MudPaper>
+    }
+  };
+
+  private async Task OnPointerDown(PointerEventArgs e)
+  {
+    if (_busy || _recording || _starting || _finishing)
+    {
+      return;
+    }
+
+    _holdActive = true;
+    _starting = true;
+    _recordingStartedAt = default;
+    _error = null;
+    ResetOperationCts();
+    _execution = null;
+    _pendingConfirmation = null;
+    _pendingExplanation = null;
+    _labels.Clear();
+    _liveTranscript = null;
+    _liveFinals = null;
+    _liveHasInterim = false;
+    _whisperPartial = null;
+    _transcript = null;
+
+    try
+    {
+      await Js.InvokeVoidAsync("voiceInterop.capturePointer", _holdButton, e.PointerId);
+
+      var supported = await Js.InvokeAsync<bool>(
+        "voiceInterop.isSupported",
+        OperationToken,
+        new object?[] { _voiceOptions.EnableLocalLiveCaptions });
+      if (!supported)
+      {
+        _error = "Microphone recording is not supported in this browser.";
+        _holdActive = false;
+        return;
+      }
+
+      var start = await Js.InvokeAsync<VoiceStartDto>(
+        "voiceInterop.startRecording",
+        OperationToken,
+        new object[]
+        {
+          new
+          {
+            pcm = _voiceOptions.EnableLocalLiveCaptions,
+            sampleRate = _voiceOptions.PcmSampleRate > 0 ? _voiceOptions.PcmSampleRate : 16000,
+            batchMs = _voiceOptions.LiveCaptionBatchMs > 0 ? _voiceOptions.LiveCaptionBatchMs : 300
+          }
+        });
+      var contentType = string.IsNullOrWhiteSpace(start?.ContentType) ? "audio/webm" : start.ContentType;
+      var fileName = string.IsNullOrWhiteSpace(start?.FileName) ? "recording.webm" : start.FileName;
+      _ = await VoiceHub.StartSessionAsync(contentType, fileName, OperationToken);
+
+      if (!_holdActive)
+      {
+        await DiscardHoldAsync("Hold the button while you speak.");
+        return;
+      }
+
+      _recording = true;
+      _recordingStartedAt = DateTimeOffset.UtcNow;
+      _status = "Listening…";
+    }
+    catch (OperationCanceledException)
+    {
+      ApplyCancelledUi();
+      await CancelJsAsync();
+      await VoiceHub.AbortSessionAsync();
+    }
+    catch (JSException ex)
+    {
+      if (IsOperationCanceled)
+      {
+        ApplyCancelledUi();
+        await CancelJsAsync();
+        await VoiceHub.AbortSessionAsync();
+        return;
+      }
+
+      _error = ex.Message;
+      _holdActive = false;
+      await CancelJsAsync();
+      await VoiceHub.AbortSessionAsync();
+    }
+    catch (Exception ex)
+    {
+      if (IsOperationCanceled)
+      {
+        ApplyCancelledUi();
+        await CancelJsAsync();
+        await VoiceHub.AbortSessionAsync();
+        return;
+      }
+
+      _error = ex.Message;
+      _holdActive = false;
+      await CancelJsAsync();
+      await VoiceHub.AbortSessionAsync();
+    }
+    finally
+    {
+      _starting = false;
+    }
+  }
+
+  private Task OnPointerUp(PointerEventArgs e) => ReleaseHoldAsync();
+
+  private Task OnLostPointerCapture(PointerEventArgs e)
+  {
+    // Layout shift after spinner/status render can fire this while the pointer is still down.
+    if (e.Buttons != 0)
+    {
+      return Task.CompletedTask;
+    }
+
+    return ReleaseHoldAsync();
+  }
+
+  [JSInvokable]
+  public Task OnVoiceAutoStop() => ReleaseHoldAsync();
+
+  [JSInvokable]
+  public Task OnLiveTranscript(LiveTranscriptDto? dto)
+  {
+    if (dto is not null)
+    {
+      _liveFinals = string.IsNullOrWhiteSpace(dto.Finals) ? _liveFinals : dto.Finals.Trim();
+      _liveHasInterim = dto.HasInterim;
+      _liveTranscript = string.IsNullOrWhiteSpace(dto.Text) ? _liveTranscript : dto.Text.Trim();
+    }
+
+    if (_recording)
+    {
+      _status = "Listening…";
+    }
+
+    return InvokeAsync(StateHasChanged);
+  }
+
+  [JSInvokable]
+  public async Task OnVoiceChunk(VoiceChunkDto chunk)
+  {
+    if (chunk is null || string.IsNullOrWhiteSpace(chunk.Base64) || IsOperationCanceled)
+    {
+      return;
+    }
+
+    await VoiceHub.AppendChunkAsync(chunk.Base64, OperationToken);
+  }
+
+  private void OnHubPartialTranscript(string text)
+  {
+    _ = InvokeAsync(() =>
+    {
+      if (!_recording && !_busy)
+      {
+        return;
+      }
+
+      if (IsOperationCanceled)
+      {
+        return;
+      }
+
+      _whisperPartial = text;
+      if (string.IsNullOrWhiteSpace(_transcript))
+      {
+        _status = "Heard (partial)…";
+      }
+
+      StateHasChanged();
+    });
+  }
+
+  private async Task ReleaseHoldAsync()
+  {
+    _holdActive = false;
+    if (_starting || (!_recording && !_finishing))
+    {
+      return;
+    }
+
+    if (!IsHoldLongEnough() && !VoiceLiveTranscriptPolicy.IsComplete(_liveFinals, _liveHasInterim))
+    {
+      await DiscardHoldAsync("Hold the button while you speak.");
+      return;
+    }
+
+    await FinishRecordingAsync();
+  }
+
+  private static readonly TimeSpan MinHold = TimeSpan.FromMilliseconds(500);
+
+  private bool IsHoldLongEnough() =>
+    _recordingStartedAt != default && DateTimeOffset.UtcNow - _recordingStartedAt >= MinHold;
+
+  private async Task DiscardHoldAsync(string? hint)
+  {
+    _recording = false;
+    _busy = false;
+    _starting = false;
+    _finishing = false;
+    _holdActive = false;
+    _status = hint;
+    _error = null;
+    await CancelJsAsync();
+    await VoiceHub.AbortSessionAsync();
+    await InvokeAsync(StateHasChanged);
+  }
+
+  private async Task FinishRecordingAsync()
+  {
+    if (_finishing || IsOperationCanceled)
+    {
+      return;
+    }
+
+    _finishing = true;
+    _recording = false;
+    _busy = true;
+    var skipWhisperWithLiveFinals =
+      !_voiceOptions.EnableLocalLiveCaptions &&
+      VoiceLiveTranscriptPolicy.IsComplete(_liveFinals, _liveHasInterim);
+    if (skipWhisperWithLiveFinals)
+    {
+      _status = "Proposing tools…";
+    }
+    else
+    {
+      _status = "Transcribing…";
+    }
+    await InvokeAsync(StateHasChanged);
+
+    VoiceRecordingDto? recording = null;
+    try
+    {
+      OperationToken.ThrowIfCancellationRequested();
+      try
+      {
+        recording = await Js.InvokeAsync<VoiceRecordingDto>("voiceInterop.stopRecording", OperationToken, Array.Empty<object>());
+      }
+      catch (JSException)
+      {
+        recording = null;
+      }
+
+      OperationToken.ThrowIfCancellationRequested();
+      CaptureLiveFinals(recording);
+
+      if (!_voiceOptions.EnableLocalLiveCaptions &&
+          VoiceLiveTranscriptPolicy.IsComplete(_liveFinals, _liveHasInterim))
+      {
+        await VoiceHub.AbortSessionAsync();
+        await ProposeFromTranscriptAsync(_liveFinals!.Trim());
+        return;
+      }
+
+      var contextHint = BuildTranscribeContextHint();
+      var hubResult = await VoiceHub.FinishSessionAsync(contextHint, OperationToken);
+      TranscribeAudioResponseDto? payload = hubResult;
+
+      if (payload is null || string.IsNullOrWhiteSpace(payload.Transcript))
+      {
+        if (VoiceLiveTranscriptPolicy.IsComplete(_whisperPartial, hasInterim: false))
+        {
+          await ProposeFromTranscriptAsync(_whisperPartial!.Trim());
+          return;
+        }
+
+        OperationToken.ThrowIfCancellationRequested();
+        if (recording is null || string.IsNullOrWhiteSpace(recording.Base64))
+        {
+          _error = "No audio was captured.";
+          return;
+        }
+
+        var audioBytes = Convert.FromBase64String(recording.Base64);
+        await using var stream = new MemoryStream(audioBytes);
+        var transcribe = await TodoDataService.TranscribeAudio(
+          stream,
+          string.IsNullOrWhiteSpace(recording.FileName) ? "recording.webm" : recording.FileName,
+          string.IsNullOrWhiteSpace(recording.ContentType) ? "audio/webm" : recording.ContentType,
+          contextHint,
+          OperationToken);
+
+        if (!transcribe.IsSucceed || transcribe.Payload is null ||
+            string.IsNullOrWhiteSpace(transcribe.Payload.Transcript))
+        {
+          _error = IsNoSpeechMessage(transcribe.Message)
+            ? "Hold the button while you speak."
+            : transcribe.Message ?? "Transcription failed.";
+          return;
+        }
+
+        payload = transcribe.Payload;
+      }
+
+      await ProposeFromTranscriptAsync(payload.Transcript.Trim());
+    }
+    catch (OperationCanceledException)
+    {
+      ApplyCancelledUi();
+    }
+    catch (Exception ex)
+    {
+      if (IsOperationCanceled)
+      {
+        ApplyCancelledUi();
+        return;
+      }
+
+      _error = IsNoSpeechMessage(ex.Message)
+        ? "Hold the button while you speak."
+        : ex.Message;
+      await CancelJsAsync();
+      await VoiceHub.AbortSessionAsync();
+    }
+    finally
+    {
+      _finishing = false;
+      if (!IsOperationCanceled)
+      {
+        _busy = false;
+        _status = null;
+      }
+    }
+  }
+
+  private void CaptureLiveFinals(VoiceRecordingDto? recording)
+  {
+    if (recording is null)
+    {
+      return;
+    }
+
+    if (!string.IsNullOrWhiteSpace(recording.LiveFinals))
+    {
+      _liveFinals = recording.LiveFinals.Trim();
+    }
+
+    _liveHasInterim = recording.LiveHasInterim;
+  }
+
+  private async Task ProposeFromTranscriptAsync(string transcript)
+  {
+    OperationToken.ThrowIfCancellationRequested();
+    if (string.IsNullOrWhiteSpace(transcript))
+    {
+      _error = "No speech was detected.";
+      return;
+    }
+
+    _transcript = transcript.Trim();
+    _status = "Proposing tools…";
+    await InvokeAsync(StateHasChanged);
+
+    var prompt = _transcript;
+    var ctxPrefix = GetUiContext?.Invoke()?.ToPromptPrefix();
+    if (!string.IsNullOrWhiteSpace(ctxPrefix))
+    {
+      prompt = ctxPrefix + "\n\nUser request:\n" + _transcript;
+    }
+
+    var proposal = await TodoDataService.ProposeAiTools(prompt, OperationToken);
+    if (!proposal.IsSucceed || proposal.Payload is null)
+    {
+      _error = proposal.Message ?? "Tool proposal failed.";
+      return;
+    }
+
+    await HandleProposalAsync(proposal.Payload);
+  }
+
+  private async Task HandleProposalAsync(ProposeAiToolsResponseDto proposal)
+  {
+    OperationToken.ThrowIfCancellationRequested();
+    if (proposal.ProposedCalls.Count == 0)
+    {
+      _error = string.IsNullOrWhiteSpace(proposal.Explanation)
+        ? "No tool calls proposed."
+        : proposal.Explanation;
+      return;
+    }
+
+    var resolve = ResolveCalls?.Invoke(proposal.ProposedCalls.Select(VoiceArgHelper.CloneCall).ToList())
+                  ?? new VoiceResolveResult { Calls = proposal.ProposedCalls.Select(VoiceArgHelper.CloneCall).ToList() };
+
+    if (!string.IsNullOrWhiteSpace(resolve.Error))
+    {
+      _error = resolve.Error;
+      return;
+    }
+
+    foreach (var pair in resolve.Labels)
+    {
+      _labels[pair.Key] = pair.Value;
+    }
+
+    var ui = GetUiContext?.Invoke();
+    VoiceToolPolicy.SplitEditFormPatches(resolve.Calls, ui, out var formPatches, out var remainder);
+    VoiceToolPolicy.SplitUnfilteredSearches(remainder, out var showAll, out remainder);
+
+    if (formPatches.Count > 0)
+    {
+      OperationToken.ThrowIfCancellationRequested();
+      await OnToolsExecuted.InvokeAsync(new VoiceCommandAppliedArgs
+      {
+        ConfirmedCalls = formPatches,
+        DisplayLabels = new Dictionary<string, string>(_labels, StringComparer.OrdinalIgnoreCase),
+        LocalEditForm = true
+      });
+    }
+
+    if (showAll.Count > 0)
+    {
+      OperationToken.ThrowIfCancellationRequested();
+      await OnToolsExecuted.InvokeAsync(new VoiceCommandAppliedArgs
+      {
+        ConfirmedCalls = showAll,
+        DisplayLabels = new Dictionary<string, string>(_labels, StringComparer.OrdinalIgnoreCase)
+      });
+    }
+
+    var autoApply = VoiceToolPolicy.FilterAutoApply(remainder);
+    var needsConfirm = VoiceToolPolicy.FilterRequiringConfirmation(remainder);
+
+    if (autoApply.Count > 0)
+    {
+      OperationToken.ThrowIfCancellationRequested();
+      _status = "Applying…";
+      await InvokeAsync(StateHasChanged);
+      await ExecuteCallsAsync(autoApply);
+    }
+
+    if (needsConfirm.Count > 0)
+    {
+      _pendingConfirmation = needsConfirm;
+      _pendingExplanation = proposal.Explanation;
+    }
+  }
+
+  private async Task ConfirmMutationsAsync()
+  {
+    if (_pendingConfirmation is null || _pendingConfirmation.Count == 0 || _busy)
+    {
+      return;
+    }
+
+    _error = null;
+    ResetOperationCts();
+    _busy = true;
+    _status = "Executing…";
+    try
+    {
+      var calls = _pendingConfirmation;
+      await ExecuteCallsAsync(calls);
+      _pendingConfirmation = null;
+      _pendingExplanation = null;
+    }
+    catch (OperationCanceledException)
+    {
+      ApplyCancelledUi();
+    }
+    finally
+    {
+      if (!IsOperationCanceled)
+      {
+        _busy = false;
+        _status = null;
+      }
+    }
+  }
+
+  private async Task ExecuteCallsAsync(List<ProposedToolCallDto> calls)
+  {
+    if (calls.Count == 0)
+    {
+      return;
+    }
+
+    var result = await TodoDataService.ExecuteAiTools(calls, OperationToken);
+    if (!result.IsSucceed || result.Payload is null)
+    {
+      _error = result.Message ?? "Tool execution failed.";
+      return;
+    }
+
+    if (_execution is null)
+    {
+      _execution = result.Payload;
+    }
+    else
+    {
+      _execution.Results.AddRange(result.Payload.Results);
+    }
+
+    await OnToolsExecuted.InvokeAsync(new VoiceCommandAppliedArgs
+    {
+      ConfirmedCalls = calls,
+      Execution = result.Payload,
+      DisplayLabels = new Dictionary<string, string>(_labels, StringComparer.OrdinalIgnoreCase)
+    });
+  }
+
+  private void ClearPendingConfirmation()
+  {
+    _pendingConfirmation = null;
+    _pendingExplanation = null;
+  }
+
+  private CancellationToken OperationToken => _operationCts?.Token ?? CancellationToken.None;
+
+  private bool IsOperationCanceled =>
+    _cancelled || (_operationCts?.IsCancellationRequested ?? false);
+
+  private void ResetOperationCts()
+  {
+    _cancelled = false;
+    try
+    {
+      _operationCts?.Cancel();
+    }
+    catch (ObjectDisposedException)
+    {
+      // already cleaned up
+    }
+
+    _operationCts?.Dispose();
+    _operationCts = new CancellationTokenSource();
+  }
+
+  private void ApplyCancelledUi()
+  {
+    _cancelled = true;
+    _recording = false;
+    _busy = false;
+    _starting = false;
+    _status = "Cancelled.";
+    _error = null;
+  }
+
+  private async Task CancelVoiceAsync()
+  {
+    _holdActive = false;
+    ApplyCancelledUi();
+    try
+    {
+      _operationCts?.Cancel();
+    }
+    catch (ObjectDisposedException)
+    {
+      // already cleaned up
+    }
+
+    await CancelJsAsync();
+    await VoiceHub.AbortSessionAsync();
+    await InvokeAsync(StateHasChanged);
+  }
+
+  private static string GetCallKey(ProposedToolCallDto call)
+  {
+    var id = VoiceArgHelper.GetString(call.Arguments, "id") ?? string.Empty;
+    var index = VoiceArgHelper.GetString(call.Arguments, "index") ?? string.Empty;
+    return $"{call.ToolName}:{id}:{index}";
+  }
+
+  private static bool IsNoSpeechMessage(string? message) =>
+    !string.IsNullOrWhiteSpace(message) &&
+    message.Contains("No speech was detected", StringComparison.OrdinalIgnoreCase);
+
+  private static string FormatArgs(Dictionary<string, JsonElement> args) =>
+    JsonSerializer.Serialize(args, new JsonSerializerOptions { WriteIndented = true });
+
+  private string BuildTranscribeContextHint()
+  {
+    var ui = GetUiContext?.Invoke();
+    if (ui is null)
+    {
+      return "voiceTodo=true";
+    }
+
+    return $"voiceTodo=true;detailsOpen={ui.DetailsOpen};editOpen={ui.EditOpen}";
+  }
+
+  private async Task CancelJsAsync()
+  {
+    try
+    {
+      await Js.InvokeVoidAsync("voiceInterop.cancelRecording");
+    }
+    catch
+    {
+      // ignore
+    }
+  }
+
+  public async ValueTask DisposeAsync()
+  {
+    VoiceHub.PartialTranscript -= OnHubPartialTranscript;
+    if (_jsAttached)
+    {
+      try
+      {
+        await Js.InvokeVoidAsync("voiceInterop.detach");
+      }
+      catch
+      {
+        // ignore
+      }
+    }
+
+    await CancelJsAsync();
+    await VoiceHub.AbortSessionAsync();
+    try
+    {
+      _operationCts?.Cancel();
+    }
+    catch (ObjectDisposedException)
+    {
+      // already cleaned up
+    }
+
+    _operationCts?.Dispose();
+    _jsRef?.Dispose();
+  }
+
+  public sealed class VoiceChunkDto
+  {
+    [System.Text.Json.Serialization.JsonPropertyName("base64")]
+    public string Base64 { get; set; } = string.Empty;
+
+    [System.Text.Json.Serialization.JsonPropertyName("contentType")]
+    public string ContentType { get; set; } = "audio/webm";
+  }
+
+  public sealed class LiveTranscriptDto
+  {
+    [System.Text.Json.Serialization.JsonPropertyName("text")]
+    public string Text { get; set; } = string.Empty;
+
+    [System.Text.Json.Serialization.JsonPropertyName("finals")]
+    public string Finals { get; set; } = string.Empty;
+
+    [System.Text.Json.Serialization.JsonPropertyName("hasInterim")]
+    public bool HasInterim { get; set; }
+  }
+
+  private sealed class VoiceStartDto
+  {
+    [System.Text.Json.Serialization.JsonPropertyName("contentType")]
+    public string ContentType { get; set; } = "audio/webm";
+
+    [System.Text.Json.Serialization.JsonPropertyName("fileName")]
+    public string FileName { get; set; } = "recording.webm";
+  }
+
+  private sealed class VoiceRecordingDto
+  {
+    [System.Text.Json.Serialization.JsonPropertyName("base64")]
+    public string Base64 { get; set; } = string.Empty;
+
+    [System.Text.Json.Serialization.JsonPropertyName("contentType")]
+    public string ContentType { get; set; } = "audio/webm";
+
+    [System.Text.Json.Serialization.JsonPropertyName("fileName")]
+    public string FileName { get; set; } = "recording.webm";
+
+    [System.Text.Json.Serialization.JsonPropertyName("liveFinals")]
+    public string LiveFinals { get; set; } = string.Empty;
+
+    [System.Text.Json.Serialization.JsonPropertyName("liveHasInterim")]
+    public bool LiveHasInterim { get; set; }
+  }
+}

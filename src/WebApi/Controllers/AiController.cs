@@ -1,9 +1,11 @@
 using Fistix.TaskManager.Core.Exceptions;
 using Fistix.TaskManager.Core.SecurityModel;
+using Fistix.TaskManager.AiLayer.Shared;
 using Fistix.TaskManager.ViewModel.Commands.Todos;
 using Fistix.TaskManager.ViewModel.Dtos;
 using Fistix.TaskManager.ViewModel.Queries.Todos;
 using Fistix.TaskManager.WebApi.Extensions;
+using FluentValidation;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -333,6 +335,108 @@ public class AiController : ControllerBase
         {
             _logger.LogError(ex, "Error proposing AI tools");
             return ApiErrorResponses.UnexpectedError(HttpContext, "Failed to propose AI tools");
+        }
+    }
+
+    /// <summary>
+    /// Client capture options for hold-to-talk (WebM + Web Speech vs local PCM captions).
+    /// </summary>
+    [HttpGet("voice-options")]
+    [ProducesResponseType(typeof(VoiceTranscriptionOptionsDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<VoiceTranscriptionOptionsDto>> GetVoiceOptions()
+    {
+        var result = await _mediator.Send(new GetVoiceTranscriptionOptionsQuery());
+        return Ok(result.Payload);
+    }
+
+    /// <summary>
+    /// Transcribes push-to-talk audio via local STT (does not create todos).
+    /// </summary>
+    [HttpPost("transcribe")]
+    [EnableRateLimiting(RateLimitPolicies.AiTranscribe)]
+    [RequestSizeLimit(6 * 1024 * 1024)]
+    [ProducesResponseType(typeof(TranscribeAudioResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<ActionResult<TranscribeAudioResponseDto>> Transcribe(
+        IFormFile file,
+        [FromServices] IValidator<TranscribeAudioCommand> validator)
+    {
+        if (file is null || file.Length == 0)
+        {
+            return BadRequest(new ProblemDetails { Detail = "Audio file is required." });
+        }
+
+        try
+        {
+            await using var stream = file.OpenReadStream();
+            using var memory = new System.IO.MemoryStream();
+            await stream.CopyToAsync(memory);
+
+            var command = new TranscribeAudioCommand
+            {
+                AudioContent = memory.ToArray(),
+                ContentType = string.IsNullOrWhiteSpace(file.ContentType)
+                    ? "application/octet-stream"
+                    : file.ContentType,
+                FileName = string.IsNullOrWhiteSpace(file.FileName) ? "audio.webm" : file.FileName,
+                ContextHint = Request.Form.TryGetValue("contextHint", out var contextHint)
+                    ? contextHint.ToString()
+                    : null
+            };
+
+            var validation = await validator.ValidateAsync(command);
+            if (!validation.IsValid)
+            {
+                foreach (var error in validation.Errors)
+                {
+                    ModelState.AddModelError(error.PropertyName, error.ErrorMessage);
+                }
+
+                return BadRequest(ModelState);
+            }
+
+            var result = await _mediator.Send(command);
+            return Ok(result.Payload);
+        }
+        catch (FeatureDisabledException ex)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new ProblemDetails
+            {
+                Title = "AI voice transcription is unavailable",
+                Detail = ex.Message,
+                Status = StatusCodes.Status503ServiceUnavailable
+            });
+        }
+        catch (SpeechToTextUnavailableException ex)
+        {
+            Response.Headers.RetryAfter = Math.Max(1, ex.RetryAfterSeconds).ToString();
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new ProblemDetails
+            {
+                Title = "Speech model is preparing",
+                Detail = ex.Message,
+                Status = StatusCodes.Status503ServiceUnavailable
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new ProblemDetails
+            {
+                Title = "Invalid transcription request",
+                Detail = ex.Message,
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+        catch (ForbiddenAccessException)
+        {
+            return Forbid();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error transcribing audio");
+            return ApiErrorResponses.UnexpectedError(HttpContext, "Failed to transcribe audio");
         }
     }
 
