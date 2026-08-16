@@ -70,10 +70,15 @@ public sealed class OpenAiCompatibleSpeechToTextService : ISpeechToTextService, 
         EnsureModelInBackground();
         if (!_isReady)
         {
-            var detail = _lastError is null
-                ? "Speech model is preparing. Please retry shortly."
-                : $"Speech model is not ready yet: {_lastError}";
-            throw new SpeechToTextUnavailableException(detail, 15);
+            // First request after restart often races warmup — wait for install/check instead of failing.
+            await EnsureModelAvailableAsync(cancellationToken);
+            if (!_isReady)
+            {
+                var detail = _lastError is null
+                    ? "Speech model is preparing. Please retry shortly."
+                    : $"Speech model is not ready yet: {_lastError}";
+                throw new SpeechToTextUnavailableException(detail, 15);
+            }
         }
 
         ArgumentNullException.ThrowIfNull(audioStream);
@@ -97,34 +102,71 @@ public sealed class OpenAiCompatibleSpeechToTextService : ISpeechToTextService, 
             content.Add(new StringContent(settings.Model), "model");
         }
 
-        var baseUrl = settings.Endpoint.TrimEnd('/');
-        var url = $"{baseUrl}/v1/audio/transcriptions";
-
-        _logger.LogInformation("Transcribing audio via {Url} (file {FileName})", url, fileName);
-
-        var client = _httpClientFactory.CreateClient("speech-to-text");
-        using var response = await client.PostAsync(url, content, cancellationToken);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
-
-        if (!response.IsSuccessStatusCode)
+        if (!string.IsNullOrWhiteSpace(settings.DecodeLanguage))
         {
-            _logger.LogWarning(
-                "Speech-to-text failed with {StatusCode}: {Body}",
-                (int)response.StatusCode,
-                TruncateForLog(body));
-
-            if (response.StatusCode == HttpStatusCode.NotFound && IsMissingModel(body))
-            {
-                _isReady = false;
-                EnsureModelInBackground();
-                throw new SpeechToTextUnavailableException("Speech model is downloading. Please retry shortly.", 20);
-            }
-
-            throw new InvalidOperationException("Speech-to-text service failed to transcribe audio.");
+            content.Add(new StringContent(settings.DecodeLanguage.Trim()), "language");
         }
 
-        var transcript = ExtractTranscript(body);
-        return PromptInputSanitizer.SanitizeAndTruncate(transcript, MaxTranscriptLength);
+        content.Add(new StringContent("0"), "temperature");
+
+        if (!string.IsNullOrWhiteSpace(settings.VocabularyPrompt))
+        {
+            // OpenAI-compatible STT endpoints commonly support prompt/initial_prompt hints.
+            content.Add(new StringContent(settings.VocabularyPrompt), "prompt");
+        }
+
+        var baseUrl = settings.Endpoint.TrimEnd('/');
+        var url = $"{baseUrl}/v1/audio/transcriptions";
+        var transcribeTimeoutSeconds = Math.Clamp(settings.TimeoutSeconds > 0 ? settings.TimeoutSeconds : 60, 10, 300);
+
+        _logger.LogInformation(
+            "Transcribing audio via {Url} (file {FileName}, timeout {TimeoutSeconds}s)",
+            url,
+            fileName,
+            transcribeTimeoutSeconds);
+
+        var client = _httpClientFactory.CreateClient("speech-to-text");
+        using var transcribeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        transcribeCts.CancelAfter(TimeSpan.FromSeconds(transcribeTimeoutSeconds));
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await client.PostAsync(url, content, transcribeCts.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            _isReady = false;
+            EnsureModelInBackground();
+            throw new SpeechToTextUnavailableException(
+                "Speech transcription timed out while the local model is warming up. Please retry in a few seconds.",
+                retryAfterSeconds: 10);
+        }
+
+        using (response)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning(
+                    "Speech-to-text failed with {StatusCode}: {Body}",
+                    (int)response.StatusCode,
+                    TruncateForLog(body));
+
+                if (response.StatusCode == HttpStatusCode.NotFound && IsMissingModel(body))
+                {
+                    _isReady = false;
+                    EnsureModelInBackground();
+                    throw new SpeechToTextUnavailableException("Speech model is downloading. Please retry shortly.", 20);
+                }
+
+                throw new InvalidOperationException("Speech-to-text service failed to transcribe audio.");
+            }
+
+            var transcript = ExtractTranscript(body);
+            return PromptInputSanitizer.SanitizeAndTruncate(transcript, MaxTranscriptLength);
+        }
     }
 
     private async Task EnsureModelAvailableAsync(CancellationToken cancellationToken)

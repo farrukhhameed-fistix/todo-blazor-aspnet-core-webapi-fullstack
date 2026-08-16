@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Fistix.TaskManager.AiLayer.Abstractions;
@@ -40,7 +41,7 @@ public sealed class SpeechToTextWarmupHostedService : IHostedService
         }
 
         _logger.LogInformation("Starting non-blocking speech model warmup");
-        _warmup.EnsureModelInBackground();
+        _ = Task.Run(() => RetryWarmupAsync(cancellationToken), cancellationToken);
         return Task.CompletedTask;
     }
 
@@ -48,4 +49,45 @@ public sealed class SpeechToTextWarmupHostedService : IHostedService
     /// No-op stop hook.
     /// </summary>
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    private async Task RetryWarmupAsync(CancellationToken cancellationToken)
+    {
+        const int maxAttempts = 8;
+        var delay = TimeSpan.FromSeconds(2);
+
+        for (var attempt = 1; attempt <= maxAttempts && !cancellationToken.IsCancellationRequested; attempt++)
+        {
+            _warmup.EnsureModelInBackground();
+
+            // Give background warmup a moment to start and update state.
+            await Task.Delay(TimeSpan.FromMilliseconds(350), cancellationToken);
+
+            if (_warmup.IsReady)
+            {
+                _logger.LogInformation("Speech model warmup ready on attempt {Attempt}", attempt);
+                return;
+            }
+
+            if (attempt == maxAttempts)
+            {
+                _logger.LogWarning(
+                    "Speech model warmup did not become ready after {Attempts} attempts. Last error: {LastError}",
+                    maxAttempts,
+                    _warmup.LastError ?? "unknown");
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(_warmup.LastError))
+            {
+                _logger.LogInformation(
+                    "Speech warmup attempt {Attempt}/{MaxAttempts} not ready yet: {LastError}",
+                    attempt,
+                    maxAttempts,
+                    _warmup.LastError);
+            }
+
+            await Task.Delay(delay, cancellationToken);
+            delay = TimeSpan.FromSeconds(Math.Min(delay.TotalSeconds * 1.5, 10));
+        }
+    }
 }

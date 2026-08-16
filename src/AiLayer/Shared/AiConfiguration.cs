@@ -30,6 +30,11 @@ public class SpeechToTextSettings
     /// <summary>Model id sent to /v1/audio/transcriptions (sidecar-specific).</summary>
     public string Model { get; set; } = "Systran/faster-whisper-tiny";
 
+    /// <summary>
+    /// Optional domain hint passed to STT service to improve transcription of project-specific terms.
+    /// </summary>
+    public string VocabularyPrompt { get; set; } = "";
+
     public int TimeoutSeconds { get; set; } = 60;
 
     /// <summary>
@@ -40,9 +45,26 @@ public class SpeechToTextSettings
     /// <summary>Max uploaded audio size in bytes (default 5 MiB).</summary>
     public int MaxAudioBytes { get; set; } = 5 * 1024 * 1024;
 
+    /// <summary>
+    /// When true, the client streams PCM batches and the hub runs one-in-flight Whisper for local live captions.
+    /// Skips browser Web Speech. Default false uses WebM + Web Speech.
+    /// </summary>
+    public bool EnableLocalLiveCaptions { get; set; }
+
+    /// <summary>ISO-639-1 hint sent to Speaches (empty = let the model detect).</summary>
+    public string DecodeLanguage { get; set; } = "en";
+
+    /// <summary>Target PCM sample rate when local live captions are enabled.</summary>
+    public int PcmSampleRate { get; set; } = 16000;
+
+    /// <summary>How often the browser flushes PCM to the hub (200–400 ms).</summary>
+    public int LiveCaptionBatchMs { get; set; } = 300;
+
     public string[] AllowedContentTypes { get; set; } =
     [
         "audio/webm",
+        "audio/pcm",
+        "audio/l16",
         "audio/wav",
         "audio/x-wav",
         "audio/mpeg",

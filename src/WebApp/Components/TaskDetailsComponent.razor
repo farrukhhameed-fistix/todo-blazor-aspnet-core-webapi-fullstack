@@ -398,6 +398,15 @@
 
     private async System.Threading.Tasks.Task RegenerateSummary() => await GenerateSummaryInternal(force: true);
 
+    /// <summary>Voice / programmatic regenerate (force refresh).</summary>
+    public Task VoiceRegenerateSummaryAsync() => GenerateSummaryInternal(force: true);
+
+    /// <summary>Voice / programmatic regenerate priority suggestion.</summary>
+    public Task VoiceRegeneratePriorityAsync() => GenerateClassification();
+
+    /// <summary>Voice / programmatic apply suggested priority.</summary>
+    public Task VoiceApplySuggestedPriorityAsync() => ApplySuggestedPriority();
+
     private async System.Threading.Tasks.Task GenerateSummaryInternal(bool force)
     {
         if (TodoItem.ExternalId == Guid.Empty)

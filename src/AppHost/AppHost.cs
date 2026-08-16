@@ -11,12 +11,12 @@ var postgres = builder
 // Resource name "MainDb" injects ConnectionStrings__MainDb for WebApi MasterConfig binding.
 var mainDb = postgres.AddDatabase("MainDb", databaseName: "taskdb");
 
-// Local OpenAI-compatible STT (Speaches / faster-whisper). CPU image + tiny model for laptop demos.
+// Local OpenAI-compatible STT (Speaches / faster-whisper). CPU image + small model for better command accuracy.
 // Persist HF model cache so Aspire/container restarts do not re-download every time.
 var whisper = builder
     .AddContainer("whisper", "ghcr.io/speaches-ai/speaches", "latest-cpu")
     .WithHttpEndpoint(targetPort: 8000, name: "http")
-    .WithEnvironment("WHISPER__MODEL", "Systran/faster-whisper-tiny")
+    .WithEnvironment("WHISPER__MODEL", "Systran/faster-whisper-small")
     .WithVolume("taskmanager-aspire-whisper-cache", "/home/ubuntu/.cache/huggingface/hub");
 
 // AddProject already registers http/https endpoints from the project; update ports

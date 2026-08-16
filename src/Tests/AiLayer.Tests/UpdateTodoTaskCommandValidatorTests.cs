@@ -73,4 +73,21 @@ public class UpdateTodoTaskCommandValidatorTests
 
         result.ShouldNotHaveValidationErrorFor(x => x.Priority);
     }
+
+    [Fact]
+    public void Should_allow_past_due_date_on_update()
+    {
+        var command = new UpdateTodoTaskCommand
+        {
+            ExternalId = Guid.NewGuid(),
+            Title = "Valid title",
+            Description = "Valid description",
+            DueDate = DateTime.UtcNow.AddDays(-3),
+            Priority = "Medium"
+        };
+
+        var result = _validator.TestValidate(command);
+
+        result.ShouldNotHaveValidationErrorFor(x => x.DueDate);
+    }
 }

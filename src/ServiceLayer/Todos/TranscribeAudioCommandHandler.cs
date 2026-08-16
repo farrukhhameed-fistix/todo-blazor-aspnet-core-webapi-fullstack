@@ -47,20 +47,25 @@ public class TranscribeAudioCommandHandler : IRequestHandler<TranscribeAudioComm
             command.ContentType);
 
         await using var stream = new MemoryStream(command.AudioContent, writable: false);
-        var transcript = await _speechToText.TranscribeAsync(
+        var rawTranscript = await _speechToText.TranscribeAsync(
             stream,
             command.FileName,
             command.ContentType,
             cancellationToken);
 
-        if (string.IsNullOrWhiteSpace(transcript))
+        if (string.IsNullOrWhiteSpace(rawTranscript))
         {
             throw new InvalidOperationException("No speech was detected in the audio.");
         }
 
+        var transcript = VoiceTranscriptNormalizer.Normalize(rawTranscript, command.ContextHint).Trim();
         return new TranscribeAudioCommandResult
         {
-            Payload = new TranscribeAudioResponseDto { Transcript = transcript.Trim() }
+            Payload = new TranscribeAudioResponseDto
+            {
+                RawTranscript = rawTranscript.Trim(),
+                Transcript = transcript
+            }
         };
     }
 

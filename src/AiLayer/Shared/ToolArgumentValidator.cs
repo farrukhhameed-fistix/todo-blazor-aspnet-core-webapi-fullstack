@@ -50,10 +50,19 @@ public static class ToolArgumentValidator
         {
             TodoToolDefinitions.CreateTodo => ValidateCreate(args),
             TodoToolDefinitions.UpdateTodo => ValidateUpdate(args),
-            TodoToolDefinitions.MarkComplete => RequireGuid(args, "id"),
+            TodoToolDefinitions.MarkComplete => RequireIdOrIndex(args),
             TodoToolDefinitions.SetPriority => ValidateSetPriority(args),
             TodoToolDefinitions.SearchTodos => ValidateSearch(args),
             TodoToolDefinitions.GetStatistics => ToolArgumentValidationResult.Ok(),
+            TodoToolDefinitions.SetSemanticSearch => ValidateSetSemanticSearch(args),
+            TodoToolDefinitions.OpenTodo => RequireIndex(args),
+            TodoToolDefinitions.CloseTodo => ToolArgumentValidationResult.Ok(),
+            TodoToolDefinitions.StartEdit => ValidateOptionalIndex(args),
+            TodoToolDefinitions.CancelEdit => ToolArgumentValidationResult.Ok(),
+            TodoToolDefinitions.SaveEdit => ToolArgumentValidationResult.Ok(),
+            TodoToolDefinitions.RegenerateSummary => ValidateOptionalIndex(args),
+            TodoToolDefinitions.RegeneratePriority => ValidateOptionalIndex(args),
+            TodoToolDefinitions.ApplySuggestedPriority => ValidateOptionalIndex(args),
             _ => ToolArgumentValidationResult.Fail($"Tool '{normalized}' is not implemented.")
         };
     }
@@ -108,40 +117,55 @@ public static class ToolArgumentValidator
 
     private static ToolArgumentValidationResult ValidateUpdate(Dictionary<string, JsonElement> args)
     {
-        var idResult = RequireGuid(args, "id");
-        if (!idResult.IsValid)
+        var target = ValidateOptionalIdOrIndex(args);
+        if (!target.IsValid)
         {
-            return idResult;
+            return target;
         }
 
         var title = GetString(args, "title");
+        var description = GetString(args, "description");
+        var status = GetString(args, "status");
+        var priority = GetString(args, "priority");
+        var dueDate = GetString(args, "dueDate");
+
+        var hasField =
+            !string.IsNullOrWhiteSpace(title) ||
+            !string.IsNullOrWhiteSpace(description) ||
+            !string.IsNullOrWhiteSpace(status) ||
+            !string.IsNullOrWhiteSpace(priority) ||
+            !string.IsNullOrWhiteSpace(dueDate);
+
+        if (!hasField)
+        {
+            return ToolArgumentValidationResult.Fail(
+                "Provide at least one field to update (title, description, priority, status, dueDate).");
+        }
+
         if (title is not null && title.Length > LlmInputLimits.TitleMaxLength)
         {
             return ToolArgumentValidationResult.Fail($"Argument 'title' exceeds {LlmInputLimits.TitleMaxLength} characters.");
         }
 
-        var description = GetString(args, "description");
         if (description is not null && description.Length > LlmInputLimits.DescriptionMaxLength)
         {
             return ToolArgumentValidationResult.Fail(
                 $"Argument 'description' exceeds {LlmInputLimits.DescriptionMaxLength} characters.");
         }
 
-        var status = GetString(args, "status");
         if (status is not null && !IsAllowedStatus(status))
         {
             return ToolArgumentValidationResult.Fail(
                 "Argument 'status' must be one of: Pending, InProgress, Completed.");
         }
 
-        var priority = GetString(args, "priority");
         if (priority is not null)
         {
             _ = ClassificationGuardrails.NormalizePriority(priority);
         }
 
-        if (GetString(args, "dueDate") is { Length: > 0 } dueRaw &&
-            !DateTime.TryParse(dueRaw, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out _))
+        if (dueDate is { Length: > 0 } &&
+            !DateTime.TryParse(dueDate, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out _))
         {
             return ToolArgumentValidationResult.Fail("Argument 'dueDate' must be a valid date/time.");
         }
@@ -151,10 +175,10 @@ public static class ToolArgumentValidator
 
     private static ToolArgumentValidationResult ValidateSetPriority(Dictionary<string, JsonElement> args)
     {
-        var idResult = RequireGuid(args, "id");
-        if (!idResult.IsValid)
+        var target = ValidateOptionalIdOrIndex(args);
+        if (!target.IsValid)
         {
-            return idResult;
+            return target;
         }
 
         var priority = GetString(args, "priority");
@@ -170,18 +194,177 @@ public static class ToolArgumentValidator
     private static ToolArgumentValidationResult ValidateSearch(Dictionary<string, JsonElement> args)
     {
         var query = GetString(args, "query");
-        if (string.IsNullOrWhiteSpace(query))
-        {
-            return ToolArgumentValidationResult.Fail("Missing required argument 'query'.");
-        }
+        var status = GetString(args, "status");
+        var dueFrom = GetString(args, "dueFrom");
+        var dueTo = GetString(args, "dueTo");
 
-        if (query.Length > LlmInputLimits.ToolSearchQueryMaxLength)
+        var hasQuery = !string.IsNullOrWhiteSpace(query);
+        var hasStatus = !string.IsNullOrWhiteSpace(status);
+        var hasDueFrom = !string.IsNullOrWhiteSpace(dueFrom);
+        var hasDueTo = !string.IsNullOrWhiteSpace(dueTo);
+
+        // Empty args = show all / clear grid filters.
+        if (hasQuery && query!.Length > LlmInputLimits.ToolSearchQueryMaxLength)
         {
             return ToolArgumentValidationResult.Fail(
                 $"Argument 'query' exceeds {LlmInputLimits.ToolSearchQueryMaxLength} characters.");
         }
 
+        if (hasStatus && !IsAllowedStatus(status))
+        {
+            return ToolArgumentValidationResult.Fail(
+                "Argument 'status' must be one of: Pending, InProgress, Completed.");
+        }
+
+        if (hasDueFrom && !DateTime.TryParse(dueFrom, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out _))
+        {
+            return ToolArgumentValidationResult.Fail("Argument 'dueFrom' must be a valid date (YYYY-MM-DD).");
+        }
+
+        if (hasDueTo && !DateTime.TryParse(dueTo, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out _))
+        {
+            return ToolArgumentValidationResult.Fail("Argument 'dueTo' must be a valid date (YYYY-MM-DD).");
+        }
+
+        if (HasArg(args, "semantic") && !TryGetBool(args, "semantic", out _))
+        {
+            return ToolArgumentValidationResult.Fail("Argument 'semantic' must be a boolean when provided.");
+        }
+
         return ToolArgumentValidationResult.Ok();
+    }
+
+    private static ToolArgumentValidationResult ValidateSetSemanticSearch(Dictionary<string, JsonElement> args)
+    {
+        if (!TryGetBool(args, "enabled", out _))
+        {
+            return ToolArgumentValidationResult.Fail("Missing or invalid required argument 'enabled' (boolean).");
+        }
+
+        return ToolArgumentValidationResult.Ok();
+    }
+
+    private static ToolArgumentValidationResult ValidateOptionalIndex(Dictionary<string, JsonElement> args)
+    {
+        if (!HasArg(args, "index"))
+        {
+            return ToolArgumentValidationResult.Ok();
+        }
+
+        return RequireIndex(args);
+    }
+
+    /// <summary>
+    /// Id/index are optional so open-task voice commands can omit the target.
+    /// When present they must still be valid.
+    /// </summary>
+    private static ToolArgumentValidationResult ValidateOptionalIdOrIndex(Dictionary<string, JsonElement> args)
+    {
+        var hasId = !string.IsNullOrWhiteSpace(GetString(args, "id"));
+        var hasIndex = HasArg(args, "index");
+        if (!hasId && !hasIndex)
+        {
+            return ToolArgumentValidationResult.Ok();
+        }
+
+        return RequireIdOrIndex(args);
+    }
+
+    private static ToolArgumentValidationResult RequireIdOrIndex(Dictionary<string, JsonElement> args)
+    {
+        var hasId = !string.IsNullOrWhiteSpace(GetString(args, "id"));
+        var hasIndex = HasArg(args, "index");
+
+        if (!hasId && !hasIndex)
+        {
+            return ToolArgumentValidationResult.Fail("Provide either 'id' (guid) or 'index' (1-based grid row).");
+        }
+
+        if (hasId)
+        {
+            var idResult = RequireGuid(args, "id");
+            if (!idResult.IsValid)
+            {
+                return idResult;
+            }
+        }
+
+        if (hasIndex)
+        {
+            var indexResult = RequireIndex(args);
+            if (!indexResult.IsValid)
+            {
+                return indexResult;
+            }
+        }
+
+        return ToolArgumentValidationResult.Ok();
+    }
+
+    private static ToolArgumentValidationResult RequireIndex(Dictionary<string, JsonElement> args)
+    {
+        if (!TryGetInt(args, "index", out var index) || index < 1)
+        {
+            return ToolArgumentValidationResult.Fail("Argument 'index' must be a positive integer (1-based grid row).");
+        }
+
+        return ToolArgumentValidationResult.Ok();
+    }
+
+    private static bool HasArg(Dictionary<string, JsonElement> args, string name) =>
+        args.Keys.Any(k => string.Equals(k, name, StringComparison.OrdinalIgnoreCase));
+
+    private static bool TryGetInt(Dictionary<string, JsonElement> args, string name, out int value)
+    {
+        value = 0;
+        foreach (var pair in args)
+        {
+            if (!string.Equals(pair.Key, name, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            switch (pair.Value.ValueKind)
+            {
+                case JsonValueKind.Number when pair.Value.TryGetInt32(out value):
+                    return true;
+                case JsonValueKind.String when int.TryParse(pair.Value.GetString(), out value):
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryGetBool(Dictionary<string, JsonElement> args, string name, out bool value)
+    {
+        value = false;
+        foreach (var pair in args)
+        {
+            if (!string.Equals(pair.Key, name, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            switch (pair.Value.ValueKind)
+            {
+                case JsonValueKind.True:
+                    value = true;
+                    return true;
+                case JsonValueKind.False:
+                    value = false;
+                    return true;
+                case JsonValueKind.String when bool.TryParse(pair.Value.GetString(), out var parsed):
+                    value = parsed;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        return false;
     }
 
     private static ToolArgumentValidationResult RequireGuid(Dictionary<string, JsonElement> args, string name)

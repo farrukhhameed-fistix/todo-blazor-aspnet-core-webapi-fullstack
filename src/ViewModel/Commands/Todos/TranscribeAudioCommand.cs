@@ -7,6 +7,7 @@ public class TranscribeAudioCommand : IRequest<TranscribeAudioCommandResult>
     public byte[] AudioContent { get; set; } = [];
     public string ContentType { get; set; } = string.Empty;
     public string FileName { get; set; } = "audio.webm";
+    public string? ContextHint { get; set; }
 }
 
 public class TranscribeAudioCommandResult
@@ -16,5 +17,6 @@ public class TranscribeAudioCommandResult
 
 public class TranscribeAudioResponseDto
 {
+    public string RawTranscript { get; set; } = string.Empty;
     public string Transcript { get; set; } = string.Empty;
 }

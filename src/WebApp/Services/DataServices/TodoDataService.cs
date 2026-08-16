@@ -1,4 +1,4 @@
-﻿using Fistix.TaskManager.ViewModel.Commands.Todos;
+using Fistix.TaskManager.ViewModel.Commands.Todos;
 using Fistix.TaskManager.ViewModel.Dtos;
 using Fistix.TaskManager.ViewModel.Queries.Todos;
 using Fistix.TaskManager.WebApp.Extentions;
@@ -200,15 +200,17 @@ namespace Fistix.TaskManager.WebApp.Services.DataServices
       return result;
     }
 
-    public async Task<ApiCallResult<ProposeAiToolsResponseDto>> ProposeAiTools(string prompt)
+    public async Task<ApiCallResult<ProposeAiToolsResponseDto>> ProposeAiTools(
+      string prompt,
+      CancellationToken cancellationToken = default)
     {
       var result = new ApiCallResult<ProposeAiToolsResponseDto>();
       var command = new ProposeAiToolsCommand { Prompt = prompt };
 
-      var response = await _httpClient.PostAsJsonAsync("api/ai/propose-tools", command);
+      var response = await _httpClient.PostAsJsonAsync("api/ai/propose-tools", command, cancellationToken);
       if (response.IsSuccessStatusCode)
       {
-        result.Payload = await response.Content.ReadFromJsonAsync<ProposeAiToolsResponseDto>();
+        result.Payload = await response.Content.ReadFromJsonAsync<ProposeAiToolsResponseDto>(cancellationToken);
         result.IsSucceed = true;
       }
       else
@@ -220,10 +222,42 @@ namespace Fistix.TaskManager.WebApp.Services.DataServices
       return result;
     }
 
+    public async Task<ApiCallResult<VoiceTranscriptionOptionsDto>> GetVoiceTranscriptionOptions(
+      CancellationToken cancellationToken = default)
+    {
+      var result = new ApiCallResult<VoiceTranscriptionOptionsDto>();
+      try
+      {
+        var response = await _httpClient.GetAsync("api/ai/voice-options", cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+          result.IsSucceed = false;
+          result.Message = await response.GetErrorMessage();
+          return result;
+        }
+
+        result.Payload = await response.Content.ReadFromJsonAsync<VoiceTranscriptionOptionsDto>(cancellationToken);
+        result.IsSucceed = result.Payload is not null;
+        if (!result.IsSucceed)
+        {
+          result.Message = "Voice options were not available.";
+        }
+      }
+      catch (Exception ex)
+      {
+        result.IsSucceed = false;
+        result.Message = ex.Message;
+      }
+
+      return result;
+    }
+
     public async Task<ApiCallResult<TranscribeAudioResponseDto>> TranscribeAudio(
       Stream fileStream,
       string fileName,
-      string contentType)
+      string contentType,
+      string? contextHint = null,
+      CancellationToken cancellationToken = default)
     {
       var result = new ApiCallResult<TranscribeAudioResponseDto>();
       using var content = new MultipartFormDataContent();
@@ -234,11 +268,15 @@ namespace Fistix.TaskManager.WebApp.Services.DataServices
       }
 
       content.Add(streamContent, "file", fileName);
+      if (!string.IsNullOrWhiteSpace(contextHint))
+      {
+        content.Add(new StringContent(contextHint), "contextHint");
+      }
 
-      var response = await _httpClient.PostAsync("api/ai/transcribe", content);
+      var response = await _httpClient.PostAsync("api/ai/transcribe", content, cancellationToken);
       if (response.IsSuccessStatusCode)
       {
-        result.Payload = await response.Content.ReadFromJsonAsync<TranscribeAudioResponseDto>();
+        result.Payload = await response.Content.ReadFromJsonAsync<TranscribeAudioResponseDto>(cancellationToken);
         result.IsSucceed = true;
       }
       else
@@ -250,15 +288,17 @@ namespace Fistix.TaskManager.WebApp.Services.DataServices
       return result;
     }
 
-    public async Task<ApiCallResult<ExecuteAiToolsResponseDto>> ExecuteAiTools(List<ProposedToolCallDto> confirmedCalls)
+    public async Task<ApiCallResult<ExecuteAiToolsResponseDto>> ExecuteAiTools(
+      List<ProposedToolCallDto> confirmedCalls,
+      CancellationToken cancellationToken = default)
     {
       var result = new ApiCallResult<ExecuteAiToolsResponseDto>();
       var command = new ExecuteAiToolsCommand { ConfirmedCalls = confirmedCalls };
 
-      var response = await _httpClient.PostAsJsonAsync("api/ai/execute-tools", command);
+      var response = await _httpClient.PostAsJsonAsync("api/ai/execute-tools", command, cancellationToken);
       if (response.IsSuccessStatusCode)
       {
-        result.Payload = await response.Content.ReadFromJsonAsync<ExecuteAiToolsResponseDto>();
+        result.Payload = await response.Content.ReadFromJsonAsync<ExecuteAiToolsResponseDto>(cancellationToken);
         result.IsSucceed = true;
       }
       else

@@ -89,5 +89,6 @@ app.MapControllers();
 app.MapHub<ClassificationHub>(ClassificationHub.HubPath);
 app.MapHub<AiBatchHub>(AiBatchHub.HubPath);
 app.MapHub<SprintOptimizerHub>(SprintOptimizerHub.HubPath);
+app.MapHub<VoiceTranscribeHub>(VoiceTranscribeHub.HubPath);
 
 await app.RunAsync();

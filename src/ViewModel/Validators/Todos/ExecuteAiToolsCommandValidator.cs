@@ -14,7 +14,16 @@ public class ExecuteAiToolsCommandValidator : AbstractValidator<ExecuteAiToolsCo
         "mark_complete",
         "set_priority",
         "search_todos",
-        "get_statistics"
+        "get_statistics",
+        "set_semantic_search",
+        "open_todo",
+        "close_todo",
+        "start_edit",
+        "cancel_edit",
+        "save_edit",
+        "regenerate_summary",
+        "regenerate_priority",
+        "apply_suggested_priority"
     ];
 
     public ExecuteAiToolsCommandValidator()

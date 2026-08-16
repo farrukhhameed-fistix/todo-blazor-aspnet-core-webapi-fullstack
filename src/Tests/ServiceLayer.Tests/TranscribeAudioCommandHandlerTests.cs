@@ -36,6 +36,23 @@ public class TranscribeAudioCommandHandlerTests
         var result = await handler.Handle(ValidCommand(), CancellationToken.None);
 
         Assert.Equal("buy milk tomorrow", result.Payload.Transcript);
+        Assert.Equal("buy milk tomorrow", result.Payload.RawTranscript);
+    }
+
+    [Fact]
+    public async Task Handle_NormalizesTranscript_WithEditContext()
+    {
+        var handler = CreateHandler(
+            enabled: true,
+            stt: new FakeSpeechToText("added this task title"));
+
+        var command = ValidCommand();
+        command.ContextHint = "editOpen=true";
+
+        var result = await handler.Handle(command, CancellationToken.None);
+
+        Assert.Equal("edit this task title", result.Payload.Transcript);
+        Assert.Equal("added this task title", result.Payload.RawTranscript);
     }
 
     [Fact]

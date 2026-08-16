@@ -16,6 +16,8 @@ public static class SpeechToTextLimits
     public static readonly string[] AllowedContentTypes =
     [
         "audio/webm",
+        "audio/pcm",
+        "audio/l16",
         "audio/wav",
         "audio/x-wav",
         "audio/mpeg",

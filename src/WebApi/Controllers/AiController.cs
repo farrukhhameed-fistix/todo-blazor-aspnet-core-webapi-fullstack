@@ -339,6 +339,17 @@ public class AiController : ControllerBase
     }
 
     /// <summary>
+    /// Client capture options for hold-to-talk (WebM + Web Speech vs local PCM captions).
+    /// </summary>
+    [HttpGet("voice-options")]
+    [ProducesResponseType(typeof(VoiceTranscriptionOptionsDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<VoiceTranscriptionOptionsDto>> GetVoiceOptions()
+    {
+        var result = await _mediator.Send(new GetVoiceTranscriptionOptionsQuery());
+        return Ok(result.Payload);
+    }
+
+    /// <summary>
     /// Transcribes push-to-talk audio via local STT (does not create todos).
     /// </summary>
     [HttpPost("transcribe")]
@@ -370,7 +381,10 @@ public class AiController : ControllerBase
                 ContentType = string.IsNullOrWhiteSpace(file.ContentType)
                     ? "application/octet-stream"
                     : file.ContentType,
-                FileName = string.IsNullOrWhiteSpace(file.FileName) ? "audio.webm" : file.FileName
+                FileName = string.IsNullOrWhiteSpace(file.FileName) ? "audio.webm" : file.FileName,
+                ContextHint = Request.Form.TryGetValue("contextHint", out var contextHint)
+                    ? contextHint.ToString()
+                    : null
             };
 
             var validation = await validator.ValidateAsync(command);

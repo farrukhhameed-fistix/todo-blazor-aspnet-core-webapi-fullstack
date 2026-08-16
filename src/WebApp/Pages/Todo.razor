@@ -1,8 +1,10 @@
-﻿@page "/todo"
+@page "/todo"
 @implements IDisposable
 @attribute [Authorize]
 
+@using System.Text.Json
 @using Fistix.TaskManager.WebApp.Components
+@using Fistix.TaskManager.WebApp.Models
 @using Fistix.TaskManager.ViewModel.Dtos
 @using Fistix.TaskManager.ViewModel.Commands.Todos
 @using Fistix.TaskManager.ViewModel.Queries.Todos
@@ -13,7 +15,7 @@
 
 <MudText Typo="Typo.h4" GutterBottom="true">Todo Tasks</MudText>
 <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
-  Manage tasks, semantic search, and AI summaries.
+  Hold the Dictate button and speak, then release. Use grid row #. Search/open/AI helpers run immediately; create/update/complete need confirm. “Show all my tasks” clears search. With Edit Task open, spoken title, description, due date, and priority fill the form (Save still persists).
 </MudText>
 
 @if (!string.IsNullOrWhiteSpace(_errorMessage))
@@ -21,9 +23,15 @@
   <MudAlert Severity="Severity.Error" Class="mb-4" Dense="true">@_errorMessage</MudAlert>
 }
 
+<VoiceTodoCommandComponent OnToolsExecuted="OnVoiceToolsExecuted"
+                           GetUiContext="() => _taskList?.GetVoiceUiContext() ?? new VoiceUiContext()"
+                           ResolveCalls="ResolveVoiceCalls" />
+
 <MudGrid>
   <MudItem xs="12" lg="8">
-    <TaskListComponent Tasks="@_tasks" OnRefresh="GetAllTodos" />
+    <TaskListComponent @ref="_taskList"
+                       Tasks="@_tasks"
+                       OnRefresh="GetAllTodos" />
   </MudItem>
   <MudItem xs="12" lg="4">
     <CreateTaskComponent OnSubmitForm="@(e => OnCreateTask((CreateTodoTaskCommand)e))" />
@@ -34,6 +42,7 @@
   private string _errorMessage = string.Empty;
   private List<TodoTaskDto> _tasks = new();
   private List<IDisposable> _subscriptions = new();
+  private TaskListComponent? _taskList;
 
   protected override void OnInitialized()
   {
@@ -104,6 +113,296 @@
   {
     _errorMessage = string.Empty;
     _TodoStateService.CreateTodo(command);
+  }
+
+  private VoiceResolveResult ResolveVoiceCalls(List<ProposedToolCallDto> calls)
+  {
+    var result = new VoiceResolveResult();
+    if (_taskList is null)
+    {
+      result.Error = "Task list is not ready.";
+      return result;
+    }
+
+    foreach (var call in calls)
+    {
+      var cloned = VoiceArgHelper.CloneCall(call);
+      var hasIndex = VoiceArgHelper.TryGetIndex(cloned.Arguments, out var index);
+      TodoTaskDto? task = null;
+      int? labelIndex = hasIndex ? index : null;
+
+      var needsTask =
+        string.Equals(cloned.ToolName, VoiceToolPolicy.OpenTodo, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(cloned.ToolName, VoiceToolPolicy.StartEdit, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(cloned.ToolName, VoiceToolPolicy.UpdateTodo, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(cloned.ToolName, VoiceToolPolicy.MarkComplete, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(cloned.ToolName, VoiceToolPolicy.SetPriority, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(cloned.ToolName, VoiceToolPolicy.RegenerateSummary, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(cloned.ToolName, VoiceToolPolicy.RegeneratePriority, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(cloned.ToolName, VoiceToolPolicy.ApplySuggestedPriority, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(cloned.ToolName, VoiceToolPolicy.SaveEdit, StringComparison.OrdinalIgnoreCase);
+
+      if (needsTask)
+      {
+        if (hasIndex)
+        {
+          if (!_taskList.TryGetByIndex(index, out task))
+          {
+            result.Error = $"No task at row #{index}.";
+            return result;
+          }
+        }
+        else if (string.Equals(cloned.ToolName, VoiceToolPolicy.OpenTodo, StringComparison.OrdinalIgnoreCase))
+        {
+          result.Error = "open_todo requires a row number.";
+          return result;
+        }
+        else if (_taskList.TryGetOpenTask(out task, out var openIdx))
+        {
+          labelIndex = openIdx;
+        }
+        else if (!string.Equals(cloned.ToolName, VoiceToolPolicy.SaveEdit, StringComparison.OrdinalIgnoreCase) &&
+                 !string.Equals(cloned.ToolName, VoiceToolPolicy.StartEdit, StringComparison.OrdinalIgnoreCase) &&
+                 !string.Equals(cloned.ToolName, VoiceToolPolicy.RegenerateSummary, StringComparison.OrdinalIgnoreCase) &&
+                 !string.Equals(cloned.ToolName, VoiceToolPolicy.RegeneratePriority, StringComparison.OrdinalIgnoreCase) &&
+                 !string.Equals(cloned.ToolName, VoiceToolPolicy.ApplySuggestedPriority, StringComparison.OrdinalIgnoreCase))
+        {
+          // mutate without index/open — leave for server if id already present
+        }
+
+        if (task is not null)
+        {
+          VoiceArgHelper.SetGuidId(cloned.Arguments, task.ExternalId);
+          var key = $"{cloned.ToolName}:{task.ExternalId}:{(hasIndex ? index.ToString() : labelIndex?.ToString() ?? string.Empty)}";
+          result.Labels[key] = VoiceArgHelper.FormatLabel(labelIndex ?? (hasIndex ? index : null), task);
+        }
+        else if (string.Equals(cloned.ToolName, VoiceToolPolicy.UpdateTodo, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(cloned.ToolName, VoiceToolPolicy.SetPriority, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(cloned.ToolName, VoiceToolPolicy.MarkComplete, StringComparison.OrdinalIgnoreCase))
+        {
+          if (!VoiceArgHelper.HasGuidId(cloned.Arguments) && !hasIndex)
+          {
+            result.Error = "No open task. Say a row number or open a task first.";
+            return result;
+          }
+        }
+      }
+
+      result.Calls.Add(cloned);
+    }
+
+    return result;
+  }
+
+  private async Task OnVoiceToolsExecuted(VoiceCommandAppliedArgs args)
+  {
+    _errorMessage = string.Empty;
+    if (_taskList is null)
+    {
+      return;
+    }
+
+    if (args.LocalEditForm)
+    {
+      var applied = 0;
+      string? lastError = null;
+      foreach (var call in args.ConfirmedCalls)
+      {
+        var patch = _taskList.ApplyOpenEditVoiceCall(call);
+        if (patch.Ok)
+        {
+          applied++;
+        }
+        else
+        {
+          lastError = patch.Error;
+        }
+      }
+
+      if (applied > 0)
+      {
+        Snackbar.Add("Updated the edit form. Save when you're ready.", Severity.Success);
+      }
+      else
+      {
+        Snackbar.Add(lastError ?? "Could not update the edit form", Severity.Warning);
+      }
+
+      return;
+    }
+
+    foreach (var call in args.ConfirmedCalls)
+    {
+      var name = call.ToolName ?? string.Empty;
+      var hasIndex = VoiceArgHelper.TryGetIndex(call.Arguments, out var index);
+      int? indexOrNull = hasIndex ? index : null;
+
+      if (string.Equals(name, VoiceToolPolicy.SetSemanticSearch, StringComparison.OrdinalIgnoreCase))
+      {
+        if (VoiceArgHelper.TryGetBool(call.Arguments, "enabled", out var enabled))
+        {
+          _taskList.SetSemanticSearchEnabled(enabled);
+        }
+        continue;
+      }
+
+      if (string.Equals(name, VoiceToolPolicy.SearchTodos, StringComparison.OrdinalIgnoreCase))
+      {
+        if (VoiceArgHelper.IsUnfilteredSearch(call.Arguments))
+        {
+          _taskList.ClearSearch();
+          Snackbar.Add("Showing all tasks", Severity.Info);
+          continue;
+        }
+
+        var query = VoiceArgHelper.GetString(call.Arguments, "query") ?? string.Empty;
+        var status = VoiceArgHelper.GetString(call.Arguments, "status");
+        var dueFrom = VoiceArgHelper.GetDate(call.Arguments, "dueFrom");
+        var dueTo = VoiceArgHelper.GetDate(call.Arguments, "dueTo");
+        bool? semantic = VoiceArgHelper.TryGetBool(call.Arguments, "semantic", out var semanticFlag)
+          ? semanticFlag
+          : null;
+        var wantSemantic = semantic == true || (semantic is null && _taskList.UseSemanticSearch);
+        var matchedIds = wantSemantic ? null : ExtractSearchMatchIds(args.Execution, name);
+        await _taskList.ApplySearchAsync(query, wantSemantic ? true : semantic, status, dueFrom, dueTo, matchedIds);
+        Snackbar.Add("Search applied", Severity.Info);
+        continue;
+      }
+
+      if (string.Equals(name, VoiceToolPolicy.OpenTodo, StringComparison.OrdinalIgnoreCase))
+      {
+        if (hasIndex && _taskList.ShowTaskDetailsByIndex(index))
+        {
+          Snackbar.Add($"Opened #{index}", Severity.Info);
+        }
+        continue;
+      }
+
+      if (string.Equals(name, VoiceToolPolicy.CloseTodo, StringComparison.OrdinalIgnoreCase))
+      {
+        _taskList.CloseAllDialogs();
+        continue;
+      }
+
+      if (string.Equals(name, VoiceToolPolicy.StartEdit, StringComparison.OrdinalIgnoreCase))
+      {
+        if (_taskList.StartEditByIndex(indexOrNull))
+        {
+          Snackbar.Add("Edit opened", Severity.Info);
+        }
+        else
+        {
+          Snackbar.Add("Could not open edit for that row", Severity.Warning);
+        }
+        continue;
+      }
+
+      if (string.Equals(name, VoiceToolPolicy.CancelEdit, StringComparison.OrdinalIgnoreCase))
+      {
+        _taskList.CloseEdit();
+        continue;
+      }
+
+      if (string.Equals(name, VoiceToolPolicy.SaveEdit, StringComparison.OrdinalIgnoreCase))
+      {
+        var save = await _taskList.SaveEditAsync();
+        if (!save.Ok)
+        {
+          Snackbar.Add(save.Error ?? "Save failed", Severity.Warning);
+        }
+        continue;
+      }
+
+      if (string.Equals(name, VoiceToolPolicy.RegenerateSummary, StringComparison.OrdinalIgnoreCase))
+      {
+        var (ok, err) = await _taskList.RegenerateSummaryAsync(indexOrNull);
+        Snackbar.Add(ok ? "Summary regenerated" : (err ?? "Summary failed"), ok ? Severity.Success : Severity.Warning);
+        continue;
+      }
+
+      if (string.Equals(name, VoiceToolPolicy.RegeneratePriority, StringComparison.OrdinalIgnoreCase))
+      {
+        var (ok, err) = await _taskList.RegeneratePriorityAsync(indexOrNull);
+        Snackbar.Add(ok ? "Priority suggestion refreshed" : (err ?? "Priority failed"), ok ? Severity.Success : Severity.Warning);
+        continue;
+      }
+
+      if (string.Equals(name, VoiceToolPolicy.ApplySuggestedPriority, StringComparison.OrdinalIgnoreCase))
+      {
+        var (ok, err) = await _taskList.ApplySuggestedPriorityAsync(indexOrNull);
+        Snackbar.Add(ok ? "Suggested priority applied" : (err ?? "Apply failed"), ok ? Severity.Success : Severity.Warning);
+        if (ok)
+        {
+          GetAllTodos();
+        }
+        continue;
+      }
+    }
+
+    var hasMutations = args.ConfirmedCalls.Any(c =>
+      VoiceToolPolicy.RequiresConfirmation(c.ToolName) &&
+      !string.Equals(c.ToolName, VoiceToolPolicy.ApplySuggestedPriority, StringComparison.OrdinalIgnoreCase) &&
+      !string.Equals(c.ToolName, VoiceToolPolicy.SaveEdit, StringComparison.OrdinalIgnoreCase));
+
+    if (hasMutations)
+    {
+      GetAllTodos();
+      Snackbar.Add("Voice changes applied", Severity.Success);
+    }
+  }
+
+  private static List<Guid>? ExtractSearchMatchIds(ExecuteAiToolsResponseDto? execution, string toolName)
+  {
+    var result = execution?.Results.LastOrDefault(r =>
+      r.Success && string.Equals(r.ToolName, toolName, StringComparison.OrdinalIgnoreCase));
+    if (result is null || string.IsNullOrWhiteSpace(result.ResultJson))
+    {
+      return null;
+    }
+
+    try
+    {
+      using var doc = JsonDocument.Parse(result.ResultJson);
+      if (doc.RootElement.ValueKind != JsonValueKind.Array)
+      {
+        return null;
+      }
+
+      var ids = new List<Guid>();
+      foreach (var item in doc.RootElement.EnumerateArray())
+      {
+        if (TryReadGuidProperty(item, "externalId", out var id) ||
+            TryReadGuidProperty(item, "todoExternalId", out id))
+        {
+          ids.Add(id);
+        }
+      }
+
+      return ids;
+    }
+    catch (JsonException)
+    {
+      return null;
+    }
+  }
+
+  private static bool TryReadGuidProperty(JsonElement item, string name, out Guid id)
+  {
+    id = default;
+    foreach (var prop in item.EnumerateObject())
+    {
+      if (!string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
+      {
+        continue;
+      }
+
+      var raw = prop.Value.ValueKind == JsonValueKind.String
+        ? prop.Value.GetString()
+        : prop.Value.ToString();
+      return Guid.TryParse(raw, out id);
+    }
+
+    return false;
   }
 
   public void Dispose()
