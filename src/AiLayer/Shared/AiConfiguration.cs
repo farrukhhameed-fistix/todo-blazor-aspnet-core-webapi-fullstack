@@ -117,6 +117,9 @@ public class AgentsSettings
 
     /// <summary>Cancel a running sprint optimizer job after this many seconds.</summary>
     public int JobTimeoutSeconds { get; set; } = 240;
+
+    /// <summary>When true, use MAF WorkflowBuilder.BuildSequential instead of hand-orchestrated RunAsync.</summary>
+    public bool UseWorkflowGraph { get; set; }
 }
 
 public class EmbeddingSettings
