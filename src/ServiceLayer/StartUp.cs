@@ -24,6 +24,9 @@ namespace Fistix.TaskManager.ServiceLayer
 
         services.AddScoped<IToolExecutor, ToolExecutor>();
       services.AddScoped<SprintPlanningTools>();
+      services.AddScoped<SprintCandidateLoader>();
+      services.AddScoped<SprintOptimizerCheckpointService>();
+      services.AddScoped<SprintOptimizerWorkflowHost>();
       services.AddScoped<SprintOptimizerAgent>();
       services.AddScoped<SprintOptimizerPersistService>();
 
