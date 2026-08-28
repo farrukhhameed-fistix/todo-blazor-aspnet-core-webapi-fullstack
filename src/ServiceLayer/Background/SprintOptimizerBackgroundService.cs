@@ -75,8 +75,8 @@ public sealed class SprintOptimizerBackgroundService : BackgroundService
         foreach (var job in stale)
         {
             job.Status = AiBatchJobStatus.Stuck;
-            job.LastError = $"No heartbeat for more than {stuckAfterSeconds}s. Cancel and retry.";
-            job.StatusMessage = "Marked stuck (no heartbeat).";
+            job.LastError = $"No heartbeat for more than {stuckAfterSeconds}s. Worker will resume from checkpoint.";
+            job.StatusMessage = "Marked stuck (no heartbeat); resume pending.";
             await jobs.UpdateAsync(job, cancellationToken);
             await notifier.NotifyAsync(SprintOptimizerJobMapper.ToDto(job), cancellationToken);
             _logger.LogWarning("Marked sprint optimizer job {JobId} as Stuck", job.ExternalId);
@@ -91,6 +91,7 @@ public sealed class SprintOptimizerBackgroundService : BackgroundService
         var agent = scope.ServiceProvider.GetRequiredService<SprintOptimizerAgent>();
         var planningTools = scope.ServiceProvider.GetRequiredService<SprintPlanningTools>();
         var persistService = scope.ServiceProvider.GetRequiredService<SprintOptimizerPersistService>();
+        var checkpointService = scope.ServiceProvider.GetRequiredService<SprintOptimizerCheckpointService>();
         var telemetry = scope.ServiceProvider.GetService<IAiTelemetry>() ?? NullAiTelemetry.Instance;
 
         var runnable = await jobs.GetRunnableAsync(cancellationToken);
@@ -110,11 +111,19 @@ public sealed class SprintOptimizerBackgroundService : BackgroundService
             return true;
         }
 
+        var resuming = string.Equals(job.Status, AiBatchJobStatus.Stuck, StringComparison.OrdinalIgnoreCase);
+        var resumeCheckpoint = resuming ? checkpointService.Deserialize(job.CheckpointJson) : null;
+
         job.Status = AiBatchJobStatus.Running;
         job.StartedAt ??= DateTime.UtcNow;
         job.HeartbeatAt = DateTime.UtcNow;
-        job.CurrentPhase = SprintOptimizerPhase.Queued;
-        job.StatusMessage = "Starting sprint optimizer…";
+        job.CurrentPhase = resuming && resumeCheckpoint is not null
+            ? resumeCheckpoint.CurrentPhase
+            : SprintOptimizerPhase.Queued;
+        job.StatusMessage = resuming
+            ? "Resuming sprint optimizer from checkpoint…"
+            : "Starting sprint optimizer…";
+        job.LastError = resuming ? null : job.LastError;
         await jobs.UpdateAsync(job, cancellationToken);
         await notifier.NotifyAsync(SprintOptimizerJobMapper.ToDto(job), cancellationToken);
 
@@ -136,7 +145,7 @@ public sealed class SprintOptimizerBackgroundService : BackgroundService
                 job.DurationDays,
                 job.Name,
                 linkedCts.Token,
-                async (phase, message, ct) =>
+                async (phase, message, analystOutput, ct) =>
                 {
                     var latest = await jobs.GetByExternalIdAsync(job.ExternalId, ct);
                     if (latest is null)
@@ -155,9 +164,19 @@ public sealed class SprintOptimizerBackgroundService : BackgroundService
                     latest.HeartbeatAt = DateTime.UtcNow;
                     latest.Status = AiBatchJobStatus.Running;
                     latest.ResultJson = SprintOptimizerJobMapper.SerializeProgressSteps(planningTools.Steps);
+
+                    var checkpoint = checkpointService.Create(
+                        phase,
+                        analystOutput?.Summary,
+                        analystOutput,
+                        planningTools.Steps,
+                        planningTools.ToolInvocationCount);
+                    checkpointService.ApplyToJob(latest, checkpoint);
+
                     await jobs.UpdateAsync(latest, ct);
                     await notifier.NotifyAsync(SprintOptimizerJobMapper.ToDto(latest), ct);
-                });
+                },
+                resumeCheckpoint);
 
             var latestAfterPlan = await jobs.GetByExternalIdAsync(job.ExternalId, cancellationToken)
                                   ?? job;
@@ -195,6 +214,8 @@ public sealed class SprintOptimizerBackgroundService : BackgroundService
                 $"Review proposed sprint ({proposal.SelectedTasks.Count} tasks) and approve or reject.";
             latestAfterPlan.ProposalJson = SprintOptimizerJobMapper.SerializeProposal(proposal);
             latestAfterPlan.ResultJson = null;
+            latestAfterPlan.CheckpointJson = null;
+            latestAfterPlan.PendingRequestId = null;
             latestAfterPlan.HeartbeatAt = DateTime.UtcNow;
             latestAfterPlan.LastError = null;
             await jobs.UpdateAsync(latestAfterPlan, cancellationToken);

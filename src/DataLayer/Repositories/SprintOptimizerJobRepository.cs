@@ -55,9 +55,14 @@ public sealed class SprintOptimizerJobRepository : ISprintOptimizerJobRepository
 
     public async Task<IReadOnlyList<SprintOptimizerJob>> GetRunnableAsync(CancellationToken cancellationToken)
     {
-        // Only Pending — Running jobs are owned by an in-flight worker until they finish/fail/cancel.
+        var runnable = new[]
+        {
+            AiBatchJobStatus.Pending,
+            AiBatchJobStatus.Stuck
+        };
+
         return await _context.SprintOptimizerJobs
-            .Where(j => j.Status == AiBatchJobStatus.Pending)
+            .Where(j => runnable.Contains(j.Status))
             .OrderBy(j => j.CreatedAt)
             .ToListAsync(cancellationToken);
     }

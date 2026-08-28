@@ -365,6 +365,13 @@ namespace Fistix.TaskManager.DataLayer.Migrations
                     b.Property<string>("ProposalJson")
                         .HasColumnType("text");
 
+                    b.Property<string>("CheckpointJson")
+                        .HasColumnType("text");
+
+                    b.Property<string>("PendingRequestId")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
                     b.Property<DateTime?>("StartedAt")
                         .HasColumnType("timestamp with time zone");
 
