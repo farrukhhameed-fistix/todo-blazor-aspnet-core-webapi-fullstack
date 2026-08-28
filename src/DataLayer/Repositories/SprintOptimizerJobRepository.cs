@@ -43,7 +43,8 @@ public sealed class SprintOptimizerJobRepository : ISprintOptimizerJobRepository
         {
             AiBatchJobStatus.Pending,
             AiBatchJobStatus.Running,
-            AiBatchJobStatus.Stuck
+            AiBatchJobStatus.Stuck,
+            AiBatchJobStatus.AwaitingApproval
         };
 
         return _context.SprintOptimizerJobs

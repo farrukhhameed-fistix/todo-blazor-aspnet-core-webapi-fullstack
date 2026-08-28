@@ -7,7 +7,6 @@ using System.Threading.Tasks;
 using Fistix.TaskManager.AiLayer.Observability;
 using Fistix.TaskManager.AiLayer.Shared;
 using Fistix.TaskManager.Core.Abstractions.Repositories;
-using Fistix.TaskManager.Core.DomainModel.Aggregates;
 using Fistix.TaskManager.Core.DomainModel.Constants;
 using Fistix.TaskManager.ServiceLayer.Notifications;
 using Fistix.TaskManager.ServiceLayer.Todos;
@@ -21,6 +20,7 @@ namespace Fistix.TaskManager.ServiceLayer.Background;
 
 /// <summary>
 /// Runs durable sprint optimizer jobs and pushes phase updates over SignalR.
+/// Planning stops at AwaitingApproval; sprint persist requires explicit user approval.
 /// </summary>
 public sealed class SprintOptimizerBackgroundService : BackgroundService
 {
@@ -90,7 +90,7 @@ public sealed class SprintOptimizerBackgroundService : BackgroundService
         var notifier = scope.ServiceProvider.GetRequiredService<ISprintOptimizerNotifier>();
         var agent = scope.ServiceProvider.GetRequiredService<SprintOptimizerAgent>();
         var planningTools = scope.ServiceProvider.GetRequiredService<SprintPlanningTools>();
-        var sprintRepository = scope.ServiceProvider.GetRequiredService<ISprintRepository>();
+        var persistService = scope.ServiceProvider.GetRequiredService<SprintOptimizerPersistService>();
         var telemetry = scope.ServiceProvider.GetService<IAiTelemetry>() ?? NullAiTelemetry.Instance;
 
         var runnable = await jobs.GetRunnableAsync(cancellationToken);
@@ -172,21 +172,29 @@ public sealed class SprintOptimizerBackgroundService : BackgroundService
                 return true;
             }
 
-            latestAfterPlan.CurrentPhase = SprintOptimizerPhase.Persisting;
-            latestAfterPlan.StatusMessage = "Persisting sprint result…";
-            latestAfterPlan.HeartbeatAt = DateTime.UtcNow;
-            latestAfterPlan.ResultJson = SprintOptimizerJobMapper.SerializeProgressSteps(planningTools.Steps);
-            await jobs.UpdateAsync(latestAfterPlan, cancellationToken);
-            await notifier.NotifyAsync(SprintOptimizerJobMapper.ToDto(latestAfterPlan), cancellationToken);
+            if (plan.SelectedTodos.Count == 0)
+            {
+                latestAfterPlan.Status = AiBatchJobStatus.Failed;
+                latestAfterPlan.CurrentPhase = SprintOptimizerPhase.Done;
+                latestAfterPlan.StatusMessage = "No tasks could be proposed for this sprint.";
+                latestAfterPlan.LastError = "Planner and heuristic fallback produced an empty selection.";
+                latestAfterPlan.CompletedAt = DateTime.UtcNow;
+                await jobs.UpdateAsync(latestAfterPlan, cancellationToken);
+                await notifier.NotifyAsync(SprintOptimizerJobMapper.ToDto(latestAfterPlan), cancellationToken);
+                operation.SetOutcome(AiTelemetryNames.Outcomes.ValidationFailed);
+                return true;
+            }
 
-            var response = await BuildResponseAsync(latestAfterPlan, plan, sprintRepository, cancellationToken);
+            var usedHeuristic = plan.Steps.Any(s =>
+                string.Equals(s.ToolName, "heuristic_fallback", StringComparison.OrdinalIgnoreCase));
+            var proposal = persistService.BuildProposal(plan, usedHeuristic);
 
-            latestAfterPlan.ResultJson = SprintOptimizerJobMapper.SerializeResult(response);
-            latestAfterPlan.CreatedSprintId = response.SprintId;
-            latestAfterPlan.Status = AiBatchJobStatus.Completed;
-            latestAfterPlan.CurrentPhase = SprintOptimizerPhase.Done;
-            latestAfterPlan.StatusMessage = $"Sprint created with {response.SelectedTasks.Count} tasks.";
-            latestAfterPlan.CompletedAt = DateTime.UtcNow;
+            latestAfterPlan.Status = AiBatchJobStatus.AwaitingApproval;
+            latestAfterPlan.CurrentPhase = SprintOptimizerPhase.AwaitingApproval;
+            latestAfterPlan.StatusMessage =
+                $"Review proposed sprint ({proposal.SelectedTasks.Count} tasks) and approve or reject.";
+            latestAfterPlan.ProposalJson = SprintOptimizerJobMapper.SerializeProposal(proposal);
+            latestAfterPlan.ResultJson = null;
             latestAfterPlan.HeartbeatAt = DateTime.UtcNow;
             latestAfterPlan.LastError = null;
             await jobs.UpdateAsync(latestAfterPlan, cancellationToken);
@@ -194,9 +202,9 @@ public sealed class SprintOptimizerBackgroundService : BackgroundService
             operation.SetOutcome(AiTelemetryNames.Outcomes.Success);
 
             _logger.LogInformation(
-                "Sprint optimizer job {JobId} completed. SprintId={SprintId}",
+                "Sprint optimizer job {JobId} awaiting approval with {TaskCount} proposed tasks",
                 latestAfterPlan.ExternalId,
-                response.SprintId);
+                proposal.SelectedTasks.Count);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -205,7 +213,6 @@ public sealed class SprintOptimizerBackgroundService : BackgroundService
         }
         catch (OperationCanceledException)
         {
-            // Job-level CancelAfter or user cancel via linked CTS.
             operation.SetOutcome(AiTelemetryNames.Outcomes.BudgetExceeded);
             telemetry.RecordQualityEvent(
                 AiTelemetryNames.Features.SprintOptimizer,
@@ -266,74 +273,6 @@ public sealed class SprintOptimizerBackgroundService : BackgroundService
             job.HeartbeatAt = DateTime.UtcNow;
             await jobs.UpdateAsync(job, cancellationToken);
         }
-    }
-
-    private static async Task<OptimizeSprintResponseDto> BuildResponseAsync(
-        SprintOptimizerJob job,
-        SprintOptimizationPlan plan,
-        ISprintRepository sprintRepository,
-        CancellationToken cancellationToken)
-    {
-        Guid sprintId;
-        string sprintName;
-        DateTime startDate;
-        DateTime endDate;
-
-        if (plan.CreatedSprintId.HasValue
-            && plan.CreatedStartDate.HasValue
-            && plan.CreatedEndDate.HasValue)
-        {
-            sprintId = plan.CreatedSprintId.Value;
-            sprintName = plan.CreatedSprintName ?? $"Optimized Sprint {plan.CreatedStartDate:yyyy-MM-dd}";
-            startDate = plan.CreatedStartDate.Value;
-            endDate = plan.CreatedEndDate.Value;
-        }
-        else
-        {
-            startDate = DateTime.UtcNow.Date;
-            endDate = startDate.AddDays(job.DurationDays);
-            sprintName = string.IsNullOrWhiteSpace(job.Name)
-                ? $"Optimized Sprint {startDate:yyyy-MM-dd}"
-                : job.Name.Trim();
-
-            var sprint = new Sprint
-            {
-                Name = sprintName,
-                StartDate = startDate,
-                EndDate = endDate,
-                CreatedByUserId = job.CreatedByUserId,
-                CreatedAt = DateTime.UtcNow,
-                Reasoning = plan.Reasoning
-            };
-            sprint.GenerateNewExternalId();
-
-            foreach (var todo in plan.SelectedTodos)
-            {
-                sprint.SprintTodos.Add(new SprintTodo { TodoId = todo.Id });
-            }
-
-            await sprintRepository.Create(sprint, cancellationToken);
-            sprintId = sprint.ExternalId;
-        }
-
-        return new OptimizeSprintResponseDto
-        {
-            SprintId = sprintId,
-            Name = sprintName,
-            StartDate = startDate,
-            EndDate = endDate,
-            Reasoning = plan.Reasoning,
-            Steps = plan.Steps,
-            SelectedTasks = plan.SelectedTodos.Select(t => new SprintTaskSummaryDto
-            {
-                ExternalId = t.ExternalId,
-                Title = t.Title,
-                Priority = t.Priority,
-                Status = t.Status,
-                DueDate = t.DueDate,
-                Category = t.Category
-            }).ToList()
-        };
     }
 
     private static string Truncate(string value, int max) =>

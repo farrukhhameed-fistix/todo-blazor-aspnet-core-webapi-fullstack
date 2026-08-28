@@ -594,6 +594,80 @@ public class AiController : ControllerBase
         }
     }
 
+    [HttpPost("agent/sprint-optimizer/{jobExternalId:guid}/approve")]
+    [EnableRateLimiting(RateLimitPolicies.AiAgents)]
+    [ProducesResponseType(typeof(SprintOptimizerJobDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<SprintOptimizerJobDto>> ApproveSprintOptimizerProposal(
+        Guid jobExternalId,
+        [FromBody] ApproveSprintOptimizerProposalCommand command)
+    {
+        if (!ModelState.IsValid)
+        {
+            return BadRequest(ModelState);
+        }
+
+        command.JobExternalId = jobExternalId;
+
+        try
+        {
+            var result = await _mediator.Send(command);
+            return Ok(result.Payload);
+        }
+        catch (NotFoundException)
+        {
+            return NotFound();
+        }
+        catch (ForbiddenAccessException)
+        {
+            return Forbid();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new ProblemDetails { Title = "Cannot approve sprint proposal", Detail = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error approving sprint optimizer proposal {JobId}", jobExternalId);
+            return ApiErrorResponses.UnexpectedError(HttpContext, "Failed to approve sprint proposal");
+        }
+    }
+
+    [HttpPost("agent/sprint-optimizer/{jobExternalId:guid}/reject")]
+    [EnableRateLimiting(RateLimitPolicies.AiAgents)]
+    [ProducesResponseType(typeof(SprintOptimizerJobDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<SprintOptimizerJobDto>> RejectSprintOptimizerProposal(Guid jobExternalId)
+    {
+        try
+        {
+            var result = await _mediator.Send(new RejectSprintOptimizerProposalCommand { JobExternalId = jobExternalId });
+            return Ok(result.Payload);
+        }
+        catch (NotFoundException)
+        {
+            return NotFound();
+        }
+        catch (ForbiddenAccessException)
+        {
+            return Forbid();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new ProblemDetails { Title = "Cannot reject sprint proposal", Detail = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error rejecting sprint optimizer proposal {JobId}", jobExternalId);
+            return ApiErrorResponses.UnexpectedError(HttpContext, "Failed to reject sprint proposal");
+        }
+    }
+
     /// <summary>
     /// Starts a durable AI batch job (embedding → classify → summarize) with pause/continue/cancel.
     /// </summary>

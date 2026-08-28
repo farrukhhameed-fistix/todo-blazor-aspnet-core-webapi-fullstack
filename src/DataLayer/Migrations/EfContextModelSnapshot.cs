@@ -362,6 +362,9 @@ namespace Fistix.TaskManager.DataLayer.Migrations
                     b.Property<string>("ResultJson")
                         .HasColumnType("text");
 
+                    b.Property<string>("ProposalJson")
+                        .HasColumnType("text");
+
                     b.Property<DateTime?>("StartedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -494,6 +497,205 @@ namespace Fistix.TaskManager.DataLayer.Migrations
                     b.ToTable("ToolExecutionLog", (string)null);
                 });
 
+            modelBuilder.Entity("Fistix.TaskManager.Core.DomainModel.Aggregates.KnowledgeDocument", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("ChunkCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Error")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<string>("ExtractedText")
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("ExternalId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(260)
+                        .HasColumnType("character varying(260)");
+
+                    b.Property<long>("FileSizeBytes")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedByUserId");
+
+                    b.HasIndex("ExternalId")
+                        .IsUnique();
+
+                    b.HasIndex("Status");
+
+                    b.ToTable("KnowledgeDocument", (string)null);
+                });
+
+            modelBuilder.Entity("Fistix.TaskManager.Core.DomainModel.Aggregates.KnowledgeChunk", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("DocumentId")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("ExternalId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<string>("Heading")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<int>("Ordinal")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DocumentId", "Ordinal")
+                        .IsUnique();
+
+                    b.HasIndex("ExternalId")
+                        .IsUnique();
+
+                    b.ToTable("KnowledgeChunk", (string)null);
+                });
+
+            modelBuilder.Entity("Fistix.TaskManager.Core.DomainModel.Aggregates.KnowledgeChunkEmbedding", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("ChunkId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Vector>("Embedding")
+                        .IsRequired()
+                        .HasColumnType("vector(384)");
+
+                    b.Property<string>("EmbeddingModel")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ChunkId", "EmbeddingModel")
+                        .IsUnique();
+
+                    b.ToTable("KnowledgeChunkEmbeddings", (string)null);
+                });
+
+            modelBuilder.Entity("Fistix.TaskManager.Core.DomainModel.Aggregates.KnowledgeIngestJob", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("ChunksEmbedded")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("CurrentStep")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<int>("DocumentId")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("ExternalId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasDefaultValueSql("gen_random_uuid()");
+
+                    b.Property<DateTime?>("HeartbeatAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedByUserId");
+
+                    b.HasIndex("DocumentId");
+
+                    b.HasIndex("ExternalId")
+                        .IsUnique();
+
+                    b.HasIndex("Status");
+
+                    b.ToTable("KnowledgeIngestJob", (string)null);
+                });
+
             modelBuilder.Entity("Fistix.TaskManager.Core.DomainModel.Aggregates.UserProfile", b =>
                 {
                     b.Property<int>("Id")
@@ -560,6 +762,39 @@ namespace Fistix.TaskManager.DataLayer.Migrations
                     b.Navigation("TodoTask");
                 });
 
+            modelBuilder.Entity("Fistix.TaskManager.Core.DomainModel.Aggregates.KnowledgeChunk", b =>
+                {
+                    b.HasOne("Fistix.TaskManager.Core.DomainModel.Aggregates.KnowledgeDocument", "Document")
+                        .WithMany("Chunks")
+                        .HasForeignKey("DocumentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Document");
+                });
+
+            modelBuilder.Entity("Fistix.TaskManager.Core.DomainModel.Aggregates.KnowledgeChunkEmbedding", b =>
+                {
+                    b.HasOne("Fistix.TaskManager.Core.DomainModel.Aggregates.KnowledgeChunk", "Chunk")
+                        .WithMany("Embeddings")
+                        .HasForeignKey("ChunkId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Chunk");
+                });
+
+            modelBuilder.Entity("Fistix.TaskManager.Core.DomainModel.Aggregates.KnowledgeIngestJob", b =>
+                {
+                    b.HasOne("Fistix.TaskManager.Core.DomainModel.Aggregates.KnowledgeDocument", "Document")
+                        .WithMany("Jobs")
+                        .HasForeignKey("DocumentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Document");
+                });
+
             modelBuilder.Entity("Fistix.TaskManager.Core.DomainModel.Aggregates.Sprint", b =>
                 {
                     b.Navigation("SprintTodos");
@@ -568,6 +803,18 @@ namespace Fistix.TaskManager.DataLayer.Migrations
             modelBuilder.Entity("Fistix.TaskManager.Core.DomainModel.Aggregates.TodoTask", b =>
                 {
                     b.Navigation("AiMetadata");
+                });
+
+            modelBuilder.Entity("Fistix.TaskManager.Core.DomainModel.Aggregates.KnowledgeDocument", b =>
+                {
+                    b.Navigation("Chunks");
+
+                    b.Navigation("Jobs");
+                });
+
+            modelBuilder.Entity("Fistix.TaskManager.Core.DomainModel.Aggregates.KnowledgeChunk", b =>
+                {
+                    b.Navigation("Embeddings");
                 });
 #pragma warning restore 612, 618
         }

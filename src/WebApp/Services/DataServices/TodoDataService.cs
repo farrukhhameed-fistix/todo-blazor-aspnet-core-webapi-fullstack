@@ -399,6 +399,54 @@ namespace Fistix.TaskManager.WebApp.Services.DataServices
       return result;
     }
 
+    public async Task<ApiCallResult<SprintOptimizerJobDto>> ApproveSprintOptimizer(
+      Guid jobExternalId,
+      IReadOnlyList<Guid>? selectedTaskExternalIds = null)
+    {
+      var result = new ApiCallResult<SprintOptimizerJobDto>();
+      var command = new ApproveSprintOptimizerProposalCommand
+      {
+        JobExternalId = jobExternalId,
+        SelectedTaskExternalIds = selectedTaskExternalIds?.ToList() ?? []
+      };
+
+      var response = await _httpClient.PostAsJsonAsync(
+        $"api/ai/agent/sprint-optimizer/{jobExternalId}/approve",
+        command);
+      if (response.IsSuccessStatusCode)
+      {
+        result.Payload = await response.Content.ReadFromJsonAsync<SprintOptimizerJobDto>();
+        result.IsSucceed = true;
+      }
+      else
+      {
+        result.IsSucceed = false;
+        result.Message = await response.GetErrorMessage();
+      }
+
+      return result;
+    }
+
+    public async Task<ApiCallResult<SprintOptimizerJobDto>> RejectSprintOptimizer(Guid jobExternalId)
+    {
+      var result = new ApiCallResult<SprintOptimizerJobDto>();
+      var response = await _httpClient.PostAsync(
+        $"api/ai/agent/sprint-optimizer/{jobExternalId}/reject",
+        null);
+      if (response.IsSuccessStatusCode)
+      {
+        result.Payload = await response.Content.ReadFromJsonAsync<SprintOptimizerJobDto>();
+        result.IsSucceed = true;
+      }
+      else
+      {
+        result.IsSucceed = false;
+        result.Message = await response.GetErrorMessage();
+      }
+
+      return result;
+    }
+
     public async Task<ApiCallResult<List<SprintDto>>> GetSprints()
     {
       var result = new ApiCallResult<List<SprintDto>>();

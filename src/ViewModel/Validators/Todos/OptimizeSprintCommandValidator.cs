@@ -22,3 +22,23 @@ public class CancelSprintOptimizerJobCommandValidator : AbstractValidator<Cancel
         RuleFor(x => x.JobExternalId).NotEmpty();
     }
 }
+
+public class ApproveSprintOptimizerProposalCommandValidator : AbstractValidator<ApproveSprintOptimizerProposalCommand>
+{
+    public ApproveSprintOptimizerProposalCommandValidator()
+    {
+        RuleFor(x => x.JobExternalId).NotEmpty();
+        RuleForEach(x => x.SelectedTaskExternalIds).NotEmpty();
+        RuleFor(x => x.SelectedTaskExternalIds)
+            .Must(ids => ids.Count <= 50)
+            .When(x => x.SelectedTaskExternalIds.Count > 0);
+    }
+}
+
+public class RejectSprintOptimizerProposalCommandValidator : AbstractValidator<RejectSprintOptimizerProposalCommand>
+{
+    public RejectSprintOptimizerProposalCommandValidator()
+    {
+        RuleFor(x => x.JobExternalId).NotEmpty();
+    }
+}

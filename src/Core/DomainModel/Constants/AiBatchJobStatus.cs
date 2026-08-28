@@ -11,10 +11,12 @@ public static class AiBatchJobStatus
     public const string Failed = "Failed";
     public const string Cancelled = "Cancelled";
     public const string Stuck = "Stuck";
+    public const string AwaitingApproval = "AwaitingApproval";
 
     public static bool IsActive(string status) =>
         string.Equals(status, Running, StringComparison.OrdinalIgnoreCase)
         || string.Equals(status, Paused, StringComparison.OrdinalIgnoreCase)
         || string.Equals(status, Pending, StringComparison.OrdinalIgnoreCase)
-        || string.Equals(status, Stuck, StringComparison.OrdinalIgnoreCase);
+        || string.Equals(status, Stuck, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(status, AwaitingApproval, StringComparison.OrdinalIgnoreCase);
 }

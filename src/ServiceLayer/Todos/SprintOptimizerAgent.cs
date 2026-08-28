@@ -41,12 +41,12 @@ public class SprintOptimizerAgent
         You are the sprint Planner for a task manager.
         You receive the Analyst's report and a list of valid todo external GUIDs.
         You MUST call tools — do not invent todo GUIDs and do not finish with text only.
-        REQUIRED steps (in order):
-        1) propose_sprint_plan — comma-separated real todo external GUIDs from the Analyst report and a brief reasoning
-        2) create_sprint — persist the sprint
+        REQUIRED step:
+        - propose_sprint_plan — comma-separated real todo external GUIDs from the Analyst report and a brief reasoning
+        Do NOT call create_sprint — the user approves proposals before anything is persisted.
         Use only ids that appear in the Analyst report or the valid-id list provided in the user message.
         Respect max task and duration constraints.
-        After both tools succeed, give a one-sentence summary.
+        After propose_sprint_plan succeeds, give a one-sentence summary.
         """;
 
     private const string SingleAgentInstructions = """
@@ -56,10 +56,10 @@ public class SprintOptimizerAgent
         1) search_incomplete_todos
         2) get_workload_stats and/or find_due_soon_todos
         3) propose_sprint_plan with a comma-separated list of real todo ids and brief reasoning
-        4) create_sprint to persist the plan
+        Do NOT call create_sprint — the user approves proposals before anything is persisted.
         Prefer High priority, earlier due dates, and thematic grouping.
         Respect max task and duration constraints exposed by the tools.
-        After tools finish, give a short final summary for the user.
+        After propose_sprint_plan succeeds, give a short final summary for the user.
         """;
 
     private readonly AiChatClientFactory _chatClientFactory;
@@ -134,15 +134,9 @@ public class SprintOptimizerAgent
                 }
             }
 
-            if (_tools.CreatedSprintId.HasValue && _tools.SelectedTodos.Count > 0)
-            {
-                return BuildPlanFromTools(response.Text, includeCreated: true);
-            }
-
             if (_tools.SelectedTodos.Count > 0)
             {
-                _logger.LogWarning("MAF agent proposed tasks but did not create sprint; handler will persist.");
-                return BuildPlanFromTools(response.Text, includeCreated: false);
+                return BuildPlanFromTools(response.Text);
             }
 
             _logger.LogWarning("MAF sprint agent did not select tasks; falling back to heuristic.");
@@ -172,7 +166,7 @@ public class SprintOptimizerAgent
         if (onPhaseChanged is not null)
         {
             await onPhaseChanged(
-                SprintOptimizerPhase.Persisting,
+                SprintOptimizerPhase.Planner,
                 _tools.BudgetExceeded
                     ? "Tool budget exceeded; using heuristic fallback selection."
                     : "Using heuristic fallback selection.",
@@ -236,7 +230,7 @@ public class SprintOptimizerAgent
 
         if (onPhaseChanged is not null)
         {
-            await onPhaseChanged(SprintOptimizerPhase.Planner, "Planner is selecting tasks and creating sprint…", cancellationToken);
+            await onPhaseChanged(SprintOptimizerPhase.Planner, "Planner is selecting tasks for proposal…", cancellationToken);
         }
 
         _tools.SetActiveAgentRole("Planner");
@@ -247,17 +241,15 @@ public class SprintOptimizerAgent
             tools:
             [
                 AIFunctionFactory.Create(_tools.SearchIncompleteTodos),
-                AIFunctionFactory.Create(_tools.ProposeSprintPlan),
-                AIFunctionFactory.Create(_tools.CreateSprint)
+                AIFunctionFactory.Create(_tools.ProposeSprintPlan)
             ]);
 
         var plannerResponse = await planner.RunAsync(plannerGoal, cancellationToken: cancellationToken);
         EnsureToolStepsPresent(plannerResponse);
 
         _logger.LogInformation(
-            "Planner phase complete. Selected={Selected}, Created={Created}",
-            _tools.SelectedTodos.Count,
-            _tools.CreatedSprintId);
+            "Planner phase complete. Selected={Selected}",
+            _tools.SelectedTodos.Count);
 
         return plannerResponse;
     }
@@ -285,8 +277,8 @@ public class SprintOptimizerAgent
             The Planner must call tools now. Valid todo external GUIDs (pick up to {maxTasks}):
             {idLine}
 
-            Call propose_sprint_plan with a comma-separated subset of these ids, then create_sprint.
-            Do not respond without calling both tools.
+            Call propose_sprint_plan with a comma-separated subset of these ids.
+            Do not respond without calling propose_sprint_plan.
             """;
 
         AIAgent planner = chatClient.AsAIAgent(
@@ -295,8 +287,7 @@ public class SprintOptimizerAgent
             description: "Recovery planner pass with explicit candidate ids.",
             tools:
             [
-                AIFunctionFactory.Create(_tools.ProposeSprintPlan),
-                AIFunctionFactory.Create(_tools.CreateSprint)
+                AIFunctionFactory.Create(_tools.ProposeSprintPlan)
             ]);
 
         _tools.Steps.Add(new AgentStepDto
@@ -326,7 +317,7 @@ public class SprintOptimizerAgent
             --- Valid todo external GUIDs (use only these in propose_sprint_plan, max {maxTasks}) ---
             {idHint}
 
-            Call propose_sprint_plan then create_sprint before finishing.
+            Call propose_sprint_plan before finishing.
             """;
     }
 
@@ -352,8 +343,7 @@ public class SprintOptimizerAgent
                 AIFunctionFactory.Create(_tools.SearchIncompleteTodos),
                 AIFunctionFactory.Create(_tools.GetWorkloadStats),
                 AIFunctionFactory.Create(_tools.FindDueSoonTodos),
-                AIFunctionFactory.Create(_tools.ProposeSprintPlan),
-                AIFunctionFactory.Create(_tools.CreateSprint)
+                AIFunctionFactory.Create(_tools.ProposeSprintPlan)
             ]);
 
         return await agent.RunAsync(goal, cancellationToken: cancellationToken);
@@ -368,18 +358,14 @@ public class SprintOptimizerAgent
     private static string BuildGoal(int maxTasks, int durationDays, string? name) =>
         $"Plan and create a sprint lasting {durationDays} days with at most {maxTasks} tasks. " +
         (string.IsNullOrWhiteSpace(name) ? "" : $"Use sprint name '{name.Trim()}'. ") +
-        "Analyst: inspect workload and recommend real todo ids. Planner: propose then create_sprint.";
+        "Analyst: inspect workload and recommend real todo ids. Planner: propose_sprint_plan only (user approves before persist).";
 
-    private SprintOptimizationPlan BuildPlanFromTools(string? agentText, bool includeCreated) =>
+    private SprintOptimizationPlan BuildPlanFromTools(string? agentText) =>
         new()
         {
             SelectedTodos = _tools.SelectedTodos.ToList(),
             Reasoning = BuildReasoning(agentText, _tools.LastProposeReasoning),
-            Steps = _tools.Steps.ToList(),
-            CreatedSprintId = includeCreated ? _tools.CreatedSprintId : null,
-            CreatedSprintName = includeCreated ? _tools.CreatedSprintName : null,
-            CreatedStartDate = includeCreated ? _tools.CreatedStartDate : null,
-            CreatedEndDate = includeCreated ? _tools.CreatedEndDate : null
+            Steps = _tools.Steps.ToList()
         };
 
     private async Task<SprintOptimizationPlan> HeuristicFallbackAsync(
@@ -485,8 +471,4 @@ public class SprintOptimizationPlan
     public List<TodoTask> SelectedTodos { get; set; } = [];
     public string Reasoning { get; set; } = string.Empty;
     public List<AgentStepDto> Steps { get; set; } = [];
-    public Guid? CreatedSprintId { get; set; }
-    public string? CreatedSprintName { get; set; }
-    public DateTime? CreatedStartDate { get; set; }
-    public DateTime? CreatedEndDate { get; set; }
 }

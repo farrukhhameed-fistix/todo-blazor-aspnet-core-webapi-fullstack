@@ -29,6 +29,9 @@ public class SprintOptimizerJob : Entity
 
     public string? LastError { get; set; }
 
+    /// <summary>JSON of SprintOptimizerProposalDto while awaiting approval.</summary>
+    public string? ProposalJson { get; set; }
+
     /// <summary>JSON of OptimizeSprintResponseDto when completed.</summary>
     public string? ResultJson { get; set; }
 
