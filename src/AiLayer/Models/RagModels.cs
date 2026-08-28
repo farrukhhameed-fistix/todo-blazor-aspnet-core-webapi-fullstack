@@ -2,6 +2,12 @@
 
 namespace Fistix.TaskManager.AiLayer.Models;
 
+public enum RagCorpusKind
+{
+    Todos = 0,
+    Knowledge = 1
+}
+
 public sealed class RagPipelineRequest
 {
     public string Question { get; set; } = string.Empty;
@@ -17,7 +23,18 @@ public sealed class RagPipelineRequest
     /// <summary>True when the user asked for recommendations / what to work on next.</summary>
     public bool IsAdviceQuestion { get; set; }
 
+    public RagCorpusKind CorpusKind { get; set; } = RagCorpusKind.Todos;
+
     public IReadOnlyList<RagSourceTodo> SourceTodos { get; set; } = Array.Empty<RagSourceTodo>();
+
+    public IReadOnlyList<RagSource> Sources { get; set; } = Array.Empty<RagSource>();
+}
+
+public sealed class RagSource
+{
+    public Guid ExternalId { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string Content { get; set; } = string.Empty;
 }
 
 public sealed class RagSourceTodo

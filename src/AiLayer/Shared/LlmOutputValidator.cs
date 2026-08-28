@@ -8,6 +8,12 @@ namespace Fistix.TaskManager.AiLayer.Shared;
 
 public static class LlmOutputValidator
 {
+    public const string InsufficientKnowledgeContextMessage =
+        "I don't have enough matching document context to answer that. Try a more specific question or upload a related file.";
+
+    public const string UngroundedKnowledgeAnswerMessage =
+        "I couldn't produce a grounded answer from the retrieved document chunks (unsupported references). Please rephrase or narrow the question.";
+
     public const string InsufficientContextMessage =
         "I don't have enough matching tasks in context to answer that. Try a more specific question or add related todos.";
 

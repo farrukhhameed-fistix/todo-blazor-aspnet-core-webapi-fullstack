@@ -45,6 +45,7 @@ public static class RateLimitingServiceExtension
             AddFixedWindowPolicy(options, RateLimitPolicies.AiClassify, aiConfig.Features.ClassifyRateLimit);
             AddFixedWindowPolicy(options, RateLimitPolicies.AiSemanticSearch, aiConfig.Features.SemanticSearchRateLimit);
             AddFixedWindowPolicy(options, RateLimitPolicies.AiRag, aiConfig.Features.RagRateLimit);
+            AddFixedWindowPolicy(options, RateLimitPolicies.AiKnowledgeRag, aiConfig.Features.KnowledgeRagRateLimit);
             AddFixedWindowPolicy(options, RateLimitPolicies.AiFunctionCalling, aiConfig.Features.FunctionCallingRateLimit);
             AddFixedWindowPolicy(options, RateLimitPolicies.AiAgents, aiConfig.Features.AgentsRateLimit);
             AddFixedWindowPolicy(options, RateLimitPolicies.AiTranscribe, aiConfig.Features.VoiceTranscriptionRateLimit);
