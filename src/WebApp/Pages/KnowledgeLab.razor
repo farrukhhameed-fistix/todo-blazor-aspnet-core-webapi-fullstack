@@ -1,0 +1,371 @@
+@page "/knowledge-lab"
+@attribute [Authorize]
+@using Fistix.TaskManager.ViewModel.Dtos
+@using Fistix.TaskManager.WebApp.Services
+@using Fistix.TaskManager.WebApp.Services.DataServices
+@inject KnowledgeDataService KnowledgeDataService
+@inject KnowledgeIngestHubService KnowledgeIngestHubService
+@inject ISnackbar Snackbar
+@implements IAsyncDisposable
+
+<MudText Typo="Typo.h4" GutterBottom="true">Knowledge Lab</MudText>
+<MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
+  Upload a text or Markdown file, watch parse → chunk → embed, then ask questions grounded in your documents.
+</MudText>
+
+<MudGrid>
+  <MudItem xs="12" md="5">
+    <MudPaper Class="pa-4 mb-4" Elevation="1">
+      <MudText Typo="Typo.h6" Class="mb-3">1. Upload</MudText>
+      <MudStack Spacing="3">
+        <MudFileUpload T="IBrowserFile" Accept=".txt,.md,text/plain,text/markdown" FilesChanged="OnFileSelected">
+          <ActivatorContent>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.UploadFile">
+              @(_selectedFile?.Name ?? "Choose .txt or .md")
+            </MudButton>
+          </ActivatorContent>
+        </MudFileUpload>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   Disabled="_busy || _selectedFile is null"
+                   OnClick="UploadAsync">
+          Index file
+        </MudButton>
+        @if (_job is not null)
+        {
+          <MudText Typo="Typo.subtitle2">Pipeline</MudText>
+          <MudStepper ActiveIndex="@StepIndex(_job)" Vertical="true">
+            <MudStep Title="Parse" />
+            <MudStep Title="Chunk" />
+            <MudStep Title="Embed" />
+            <MudStep Title="Ready" />
+          </MudStepper>
+          <MudText Typo="Typo.caption" Color="Color.Secondary">
+            @_job.FileName · @_job.Status / @_job.CurrentStep
+            @if (_job.ChunkCount > 0)
+            {
+              <span> · @_job.ChunksEmbedded / @_job.ChunkCount chunks</span>
+            }
+          </MudText>
+          @if (!string.IsNullOrWhiteSpace(_job.LastError))
+          {
+            <MudAlert Severity="Severity.Error" Dense="true">@_job.LastError</MudAlert>
+          }
+        }
+      </MudStack>
+    </MudPaper>
+
+    <MudPaper Class="pa-4" Elevation="1">
+      <MudText Typo="Typo.h6" Class="mb-3">2. Documents</MudText>
+      @if (_documents.Count == 0)
+      {
+        <MudText Color="Color.Secondary">No documents yet.</MudText>
+      }
+      else
+      {
+        <MudList T="KnowledgeDocumentDto">
+          @foreach (var doc in _documents)
+          {
+            <MudListItem T="KnowledgeDocumentDto"
+                         OnClick="@(() => SelectDocumentAsync(doc))"
+                         Icon="@Icons.Material.Filled.Description">
+              <div class="d-flex justify-space-between align-center">
+                <div>
+                  <MudText Typo="Typo.body1">@doc.FileName</MudText>
+                  <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    @doc.Status · @doc.ChunkCount chunks
+                  </MudText>
+                </div>
+                <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
+                               Disabled="_busy" OnClick="@(() => DeleteDocumentAsync(doc))" />
+              </div>
+            </MudListItem>
+          }
+        </MudList>
+      }
+    </MudPaper>
+  </MudItem>
+
+  <MudItem xs="12" md="7">
+    <MudPaper Class="pa-4 mb-4" Elevation="1">
+      <MudText Typo="Typo.h6" Class="mb-3">3. Ask</MudText>
+      <MudStack Spacing="3">
+        <MudTextField @bind-Value="_question"
+                      Label="Question"
+                      Variant="Variant.Outlined"
+                      Lines="3"
+                      Placeholder="@(_selectedDocument is null ? "Ask across all your documents" : $"Ask about {_selectedDocument.FileName}")" />
+        <MudStack Row="true" Spacing="2">
+          <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_busy" OnClick="AskAsync">Ask</MudButton>
+          @if (_selectedDocument is not null)
+          {
+            <MudChip T="string" Color="Color.Info" OnClose="ClearSelectedDocument">
+              @_selectedDocument.FileName
+            </MudChip>
+          }
+        </MudStack>
+        @if (_answer is not null)
+        {
+          <MudPaper Class="pa-4" Outlined="true">
+            <MudText Typo="Typo.caption" Color="Color.Secondary">Model: @_answer.Model</MudText>
+            <MudText Typo="Typo.body1" Class="mt-2" Style="white-space: pre-wrap;">@_answer.Answer</MudText>
+            @if (_answer.Sources.Count > 0)
+            {
+              <MudText Typo="Typo.subtitle2" Class="mt-3 mb-2">Sources</MudText>
+              @foreach (var source in _answer.Sources)
+              {
+                <MudChip T="string" Size="Size.Small" Class="ma-1"
+                         OnClick="@(() => OpenChunkFromSource(source))">
+                  @source.FileName #@(source.Ordinal + 1)
+                </MudChip>
+              }
+            }
+            <MudExpansionPanels Class="mt-3" Elevation="0">
+              <MudExpansionPanel Text="RAG trace">
+                <MudText Typo="Typo.caption">Sanitize: @_answer.Trace.SanitizedQuestion</MudText>
+                <MudText Typo="Typo.caption">Embed: @_answer.Trace.EmbeddingModel</MudText>
+                <MudText Typo="Typo.caption">Hits: @_answer.Trace.HitCount · Outcome: @_answer.Trace.Outcome</MudText>
+                @foreach (var hit in _answer.Trace.Hits)
+                {
+                  <MudText Typo="Typo.caption">
+                    @hit.FileName #@(hit.Ordinal + 1) — similarity @hit.Similarity.ToString("0.00")
+                  </MudText>
+                }
+              </MudExpansionPanel>
+            </MudExpansionPanels>
+          </MudPaper>
+        }
+      </MudStack>
+    </MudPaper>
+
+    @if (_chunks.Count > 0 && _selectedDocument is not null)
+    {
+      <MudPaper Class="pa-4" Elevation="1">
+        <MudText Typo="Typo.h6" Class="mb-3">Chunks — @_selectedDocument.FileName</MudText>
+        @foreach (var chunk in _chunks)
+        {
+          <MudPaper Class="pa-3 mb-2" Outlined="true">
+            <MudText Typo="Typo.caption" Color="Color.Secondary">
+              #@(chunk.Ordinal + 1)
+              @if (!string.IsNullOrWhiteSpace(chunk.Heading))
+              {
+                <span> · @chunk.Heading</span>
+              }
+            </MudText>
+            <MudText Typo="Typo.body2" Style="white-space: pre-wrap;">@chunk.Content</MudText>
+          </MudPaper>
+        }
+      </MudPaper>
+    }
+  </MudItem>
+</MudGrid>
+
+@code {
+  private IBrowserFile? _selectedFile;
+  private bool _busy;
+  private KnowledgeIngestJobDto? _job;
+  private List<KnowledgeDocumentDto> _documents = [];
+  private KnowledgeDocumentDto? _selectedDocument;
+  private List<KnowledgeChunkDto> _chunks = [];
+  private string _question = string.Empty;
+  private KnowledgeQueryResponseDto? _answer;
+  private Timer? _pollTimer;
+
+  protected override async Task OnInitializedAsync()
+  {
+    KnowledgeIngestHubService.JobUpdated += OnJobUpdated;
+    await RefreshDocumentsAsync();
+  }
+
+  private void OnFileSelected(IBrowserFile file) => _selectedFile = file;
+
+  private async Task UploadAsync()
+  {
+    if (_selectedFile is null) return;
+    _busy = true;
+    try
+    {
+      await using var stream = _selectedFile.OpenReadStream(maxAllowedSize: 2 * 1024 * 1024);
+      var result = await KnowledgeDataService.UploadAsync(stream, _selectedFile.Name, _selectedFile.ContentType);
+      if (!result.IsSucceed || result.Payload is null)
+      {
+        Snackbar.Add(result.Message ?? "Upload failed", Severity.Error);
+        return;
+      }
+
+      _job = result.Payload.Job;
+      _selectedDocument = result.Payload.Document;
+      await KnowledgeIngestHubService.SubscribeToJobAsync(_job.ExternalId);
+      StartPolling(_job.ExternalId);
+      await RefreshDocumentsAsync();
+    }
+    catch (Exception ex)
+    {
+      Snackbar.Add(ex.Message, Severity.Error);
+    }
+    finally { _busy = false; }
+  }
+
+  private async Task RefreshDocumentsAsync()
+  {
+    var result = await KnowledgeDataService.ListDocumentsAsync();
+    if (result.IsSucceed && result.Payload is not null)
+    {
+      _documents = result.Payload;
+    }
+    else if (!string.IsNullOrWhiteSpace(result.Message))
+    {
+      Snackbar.Add(result.Message, Severity.Warning);
+    }
+  }
+
+  private async Task SelectDocumentAsync(KnowledgeDocumentDto doc)
+  {
+    _selectedDocument = doc;
+    _chunks = [];
+    var chunks = await KnowledgeDataService.ListChunksAsync(doc.ExternalId);
+    if (chunks.IsSucceed && chunks.Payload is not null)
+    {
+      _chunks = chunks.Payload;
+    }
+
+    if (doc.IngestJobExternalId.HasValue)
+    {
+      var job = await KnowledgeDataService.GetIngestJobAsync(doc.IngestJobExternalId.Value);
+      if (job.IsSucceed)
+      {
+        _job = job.Payload;
+      }
+    }
+  }
+
+  private void ClearSelectedDocument()
+  {
+    _selectedDocument = null;
+    _chunks = [];
+  }
+
+  private async Task DeleteDocumentAsync(KnowledgeDocumentDto doc)
+  {
+    _busy = true;
+    try
+    {
+      var deleted = await KnowledgeDataService.DeleteDocumentAsync(doc.ExternalId);
+      if (!deleted.IsSucceed)
+      {
+        Snackbar.Add(deleted.Message ?? "Delete failed", Severity.Error);
+        return;
+      }
+
+      if (_selectedDocument?.ExternalId == doc.ExternalId)
+      {
+        ClearSelectedDocument();
+      }
+
+      await RefreshDocumentsAsync();
+    }
+    finally { _busy = false; }
+  }
+
+  private async Task AskAsync()
+  {
+    if (string.IsNullOrWhiteSpace(_question)) return;
+    _busy = true;
+    try
+    {
+      var result = await KnowledgeDataService.QueryAsync(_question, _selectedDocument?.ExternalId);
+      if (!result.IsSucceed || result.Payload is null)
+      {
+        Snackbar.Add(result.Message ?? "Ask failed", Severity.Error);
+        return;
+      }
+
+      _answer = result.Payload;
+    }
+    finally { _busy = false; }
+  }
+
+  private void OpenChunkFromSource(KnowledgeQuerySourceDto source)
+  {
+    var match = _documents.FirstOrDefault(d => d.ExternalId == source.DocumentExternalId);
+    if (match is not null)
+    {
+      _ = SelectDocumentAsync(match);
+    }
+  }
+
+  private void OnJobUpdated(KnowledgeIngestJobDto dto)
+  {
+    _ = InvokeAsync(async () =>
+    {
+      _job = dto;
+      if (dto.Status is "Completed" or "Failed" or "Stuck")
+      {
+        StopPolling();
+        await RefreshDocumentsAsync();
+        if (_selectedDocument?.ExternalId == dto.DocumentExternalId)
+        {
+          await SelectDocumentAsync(new KnowledgeDocumentDto
+          {
+            ExternalId = dto.DocumentExternalId,
+            FileName = dto.FileName,
+            Status = dto.DocumentStatus,
+            ChunkCount = dto.ChunkCount,
+            IngestJobExternalId = dto.ExternalId
+          });
+        }
+      }
+      StateHasChanged();
+    });
+  }
+
+  private void StartPolling(Guid jobId)
+  {
+    StopPolling();
+    _pollTimer = new Timer(async _ =>
+    {
+      var result = await KnowledgeDataService.GetIngestJobAsync(jobId);
+      if (result.IsSucceed && result.Payload is not null)
+      {
+        await InvokeAsync(() =>
+        {
+          _job = result.Payload;
+          StateHasChanged();
+        });
+        if (result.Payload.Status is "Completed" or "Failed" or "Stuck" or "Cancelled")
+        {
+          StopPolling();
+        }
+      }
+    }, null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
+  }
+
+  private void StopPolling()
+  {
+    _pollTimer?.Dispose();
+    _pollTimer = null;
+  }
+
+  private static int StepIndex(KnowledgeIngestJobDto job)
+  {
+    if (string.Equals(job.DocumentStatus, "Ready", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(job.Status, "Completed", StringComparison.OrdinalIgnoreCase))
+    {
+      return 3;
+    }
+
+    return job.CurrentStep switch
+    {
+      "Parse" => 0,
+      "Chunk" => 1,
+      "Embed" => 2,
+      _ => 0
+    };
+  }
+
+  public async ValueTask DisposeAsync()
+  {
+    StopPolling();
+    KnowledgeIngestHubService.JobUpdated -= OnJobUpdated;
+    await KnowledgeIngestHubService.DisposeAsync();
+  }
+}

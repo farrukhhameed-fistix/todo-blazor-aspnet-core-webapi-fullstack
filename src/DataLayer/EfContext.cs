@@ -19,6 +19,10 @@ namespace Fistix.TaskManager.DataLayer
     public DbSet<SprintTodo> SprintTodos { get; set; }
     public DbSet<AiBatchJob> AiBatchJobs { get; set; }
     public DbSet<SprintOptimizerJob> SprintOptimizerJobs { get; set; }
+    public DbSet<KnowledgeDocument> KnowledgeDocuments { get; set; }
+    public DbSet<KnowledgeChunk> KnowledgeChunks { get; set; }
+    public DbSet<KnowledgeChunkEmbedding> KnowledgeChunkEmbeddings { get; set; }
+    public DbSet<KnowledgeIngestJob> KnowledgeIngestJobs { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -36,6 +40,10 @@ namespace Fistix.TaskManager.DataLayer
       SprintTodoModelConfig(modelBuilder);
       AiBatchJobModelConfig(modelBuilder);
       SprintOptimizerJobModelConfig(modelBuilder);
+      KnowledgeDocumentModelConfig(modelBuilder);
+      KnowledgeChunkModelConfig(modelBuilder);
+      KnowledgeChunkEmbeddingModelConfig(modelBuilder);
+      KnowledgeIngestJobModelConfig(modelBuilder);
     }
 
     private void TodoTaskModelConfig(ModelBuilder modelBuilder)
@@ -189,6 +197,88 @@ namespace Fistix.TaskManager.DataLayer
         entityModel.Property(p => p.Reasoning).HasMaxLength(4000);
         entityModel.HasIndex(p => p.CreatedByUserId);
         entityModel.HasIndex(p => p.CreatedAt);
+      });
+    }
+
+    private void KnowledgeDocumentModelConfig(ModelBuilder modelBuilder)
+    {
+      modelBuilder.Entity<KnowledgeDocument>(entityModel =>
+      {
+        entityModel.ToTable("KnowledgeDocument");
+        entityModel.HasKey(k => k.Id);
+        entityModel.Property(p => p.Id).ValueGeneratedOnAdd();
+        entityModel.Property(p => p.ExternalId)
+          .HasDefaultValueSql("gen_random_uuid()")
+          .IsRequired();
+        entityModel.HasIndex(k => k.ExternalId).IsUnique();
+        entityModel.Property(p => p.CreatedByUserId).IsRequired();
+        entityModel.HasIndex(p => p.CreatedByUserId);
+        entityModel.Property(p => p.FileName).HasMaxLength(260).IsRequired();
+        entityModel.Property(p => p.ContentType).HasMaxLength(100).IsRequired();
+        entityModel.Property(p => p.Status).HasMaxLength(50).IsRequired();
+        entityModel.Property(p => p.Error).HasMaxLength(2000);
+        entityModel.HasIndex(p => p.Status);
+      });
+    }
+
+    private void KnowledgeChunkModelConfig(ModelBuilder modelBuilder)
+    {
+      modelBuilder.Entity<KnowledgeChunk>(entityModel =>
+      {
+        entityModel.ToTable("KnowledgeChunk");
+        entityModel.HasKey(k => k.Id);
+        entityModel.Property(p => p.Id).ValueGeneratedOnAdd();
+        entityModel.Property(p => p.ExternalId)
+          .HasDefaultValueSql("gen_random_uuid()")
+          .IsRequired();
+        entityModel.HasIndex(k => k.ExternalId).IsUnique();
+        entityModel.Property(p => p.Content).IsRequired();
+        entityModel.Property(p => p.Heading).HasMaxLength(500);
+        entityModel.HasIndex(p => new { p.DocumentId, p.Ordinal }).IsUnique();
+        entityModel.HasOne(c => c.Document)
+          .WithMany(d => d.Chunks)
+          .HasForeignKey(c => c.DocumentId)
+          .OnDelete(DeleteBehavior.Cascade);
+      });
+    }
+
+    private void KnowledgeChunkEmbeddingModelConfig(ModelBuilder modelBuilder)
+    {
+      modelBuilder.Entity<KnowledgeChunkEmbedding>(entityModel =>
+      {
+        entityModel.ToTable("KnowledgeChunkEmbeddings");
+        entityModel.HasKey(k => k.Id);
+        entityModel.Property(p => p.Embedding).HasColumnType("vector(384)");
+        entityModel.Property(p => p.EmbeddingModel).HasMaxLength(100).IsRequired();
+        entityModel.HasIndex(e => new { e.ChunkId, e.EmbeddingModel }).IsUnique();
+        entityModel.HasOne(e => e.Chunk)
+          .WithMany(c => c.Embeddings)
+          .HasForeignKey(e => e.ChunkId)
+          .OnDelete(DeleteBehavior.Cascade);
+      });
+    }
+
+    private void KnowledgeIngestJobModelConfig(ModelBuilder modelBuilder)
+    {
+      modelBuilder.Entity<KnowledgeIngestJob>(entityModel =>
+      {
+        entityModel.ToTable("KnowledgeIngestJob");
+        entityModel.HasKey(k => k.Id);
+        entityModel.Property(p => p.Id).ValueGeneratedOnAdd();
+        entityModel.Property(p => p.ExternalId)
+          .HasDefaultValueSql("gen_random_uuid()")
+          .IsRequired();
+        entityModel.HasIndex(k => k.ExternalId).IsUnique();
+        entityModel.Property(p => p.CreatedByUserId).IsRequired();
+        entityModel.HasIndex(p => p.CreatedByUserId);
+        entityModel.HasIndex(p => p.Status);
+        entityModel.Property(p => p.CurrentStep).HasMaxLength(50).IsRequired();
+        entityModel.Property(p => p.Status).HasMaxLength(50).IsRequired();
+        entityModel.Property(p => p.LastError).HasMaxLength(2000);
+        entityModel.HasOne(j => j.Document)
+          .WithMany(d => d.Jobs)
+          .HasForeignKey(j => j.DocumentId)
+          .OnDelete(DeleteBehavior.Cascade);
       });
     }
 

@@ -1,0 +1,193 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [4 0 R 6 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>
+endobj
+5 0 obj
+<< /Length 2066 >>
+stream
+BT
+/F1 10 Tf
+14 TL
+50 750 Td
+(# Acme Task Manager ? Sprint Handbook \(Q3 2026\)) Tj
+T*
+() Tj
+T*
+(Internal notes for Knowledge Lab RAG manual testing. Distinct facts below are intentional.) Tj
+T*
+() Tj
+T*
+(## Product overview) Tj
+T*
+() Tj
+T*
+(Acme Task Manager is a Blazor WASM + ASP.NET Core application. Users authenticate with **A) Tj
+T*
+(uth0 JWT**. The primary database is **PostgreSQL with pgvector**. Local embeddings use **O) Tj
+T*
+(NNX BGE-small-en-v1.5** at **384 dimensions**.) Tj
+T*
+() Tj
+T*
+(## Team and ownership) Tj
+T*
+() Tj
+T*
+(- Product owner: **Maya Chen**) Tj
+T*
+(- Engineering lead: **Omar Farooq**) Tj
+T*
+(- Security reviewer: **Lina Park**) Tj
+T*
+(- The Auth0 login epic is owned by the **Platform** squad.) Tj
+T*
+(- The Stripe billing epic is owned by the **Payments** squad.) Tj
+T*
+() Tj
+T*
+(## Sprint Aurora \(14 days\)) Tj
+T*
+() Tj
+T*
+(Sprint Aurora runs from **2026-09-01** to **2026-09-14**. Capacity is **12 story points**.) Tj
+T*
+( The sprint goal is: ship Knowledge Lab document RAG and harden Auth0 silent token refresh) Tj
+T*
+(.) Tj
+T*
+() Tj
+T*
+(Committed work:) Tj
+T*
+() Tj
+T*
+(1. **AUTH-221** ? Fix Auth0 silent refresh on Blazor WASM \(High, 5 points\). Owner: Platfor) Tj
+T*
+(m.) Tj
+T*
+(2. **KNOW-104** ? Knowledge Lab parse ? chunk ? embed pipeline \(High, 5 points\). Owner: AI) Tj
+T*
+( guild.) Tj
+T*
+(3. **PAY-88** ? Show Stripe invoice PDF link on billing page \(Medium, 2 points\). Owner: Pa) Tj
+T*
+(yments.) Tj
+T*
+() Tj
+T*
+(Out of scope for Aurora: GraphRAG, PDF ingest, and multi-tenant SaaS hardening.) Tj
+T*
+() Tj
+T*
+(## Support SLAs) Tj
+T*
+() Tj
+T*
+(- **P1 \(production outage\):** acknowledge within **15 minutes**, mitigate within **2 hours) Tj
+T*
+(**.) Tj
+T*
+(- **P2 \(degraded AI feature\):** acknowledge within **4 hours**, fix or feature-flag off wi) Tj
+T*
+(thin **1 business day**.) Tj
+T*
+(- **P3 \(cosmetic\):** next sprint.) Tj
+T*
+() Tj
+T*
+(If RAG answers cite invented task IDs, treat that as a **P2 quality incident**.) Tj
+T*
+() Tj
+T*
+(## Configuration defaults) Tj
+T*
+() Tj
+T*
+(Knowledge Lab defaults:) Tj
+ET
+endstream
+endobj
+6 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 7 0 R /Resources << /Font << /F1 3 0 R >> >> >>
+endobj
+7 0 obj
+<< /Length 1010 >>
+stream
+BT
+/F1 10 Tf
+14 TL
+50 750 Td
+() Tj
+T*
+(- Max upload size: **2 MB**) Tj
+T*
+(- Allowed file types: **.txt** and **.md** only) Tj
+T*
+(- Chunk size: **800** characters) Tj
+T*
+(- Chunk overlap: **100** characters) Tj
+T*
+(- Retrieval limit: **5** chunks) Tj
+T*
+(- Minimum similarity: **0.45**) Tj
+T*
+() Tj
+T*
+(Feature flag name: `Ai:Features:EnableKnowledgeRag`.) Tj
+T*
+() Tj
+T*
+(## Forbidden facts \(for negative tests\)) Tj
+T*
+() Tj
+T*
+(Do **not** claim any of the following in this handbook:) Tj
+T*
+() Tj
+T*
+(- We do **not** use Redis as the primary vector store.) Tj
+T*
+(- We do **not** support PDF upload in Knowledge Lab v1.) Tj
+T*
+(- Sprint Aurora does **not** include GraphRAG.) Tj
+T*
+() Tj
+T*
+(## Glossary) Tj
+T*
+() Tj
+T*
+(- **ExternalId:** public GUID used in APIs \(never expose EF internal integer Ids\).) Tj
+T*
+(- **RAGPipeline:** generates answers only from caller-supplied sources; it does not retrie) Tj
+T*
+(ve.) Tj
+T*
+(- **MinSimilarity:** cosine similarity floor; weak neighbors are dropped.) Tj
+ET
+endstream
+endobj
+xref
+0 8
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000121 00000 n 
+0000000191 00000 n 
+0000000317 00000 n 
+0000002435 00000 n 
+0000002561 00000 n 
+trailer
+<< /Size 8 /Root 1 0 R >>
+startxref
+3623
+%%EOF

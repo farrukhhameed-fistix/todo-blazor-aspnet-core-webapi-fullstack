@@ -38,10 +38,19 @@ public sealed class RAGPipeline
     {
         var model = ResolveChatModel(_aiConfig);
         using var operation = _telemetry.StartOperation(
-            AiTelemetryNames.Features.Rag,
+            request.CorpusKind == RagCorpusKind.Knowledge
+                ? AiTelemetryNames.Features.KnowledgeRag
+                : AiTelemetryNames.Features.Rag,
             model: model,
             provider: _aiConfig.Provider);
-        operation.Activity?.SetTag(AiTelemetryNames.Tags.PromptVersion, AiPromptVersions.Rag);
+        operation.Activity?.SetTag(
+            AiTelemetryNames.Tags.PromptVersion,
+            request.CorpusKind == RagCorpusKind.Knowledge ? AiPromptVersions.KnowledgeRag : AiPromptVersions.Rag);
+
+        if (request.CorpusKind == RagCorpusKind.Knowledge)
+        {
+            return await ExecuteKnowledgeAsync(request, model, operation, cancellationToken);
+        }
 
         var sourceIds = request.SourceTodos.Select(s => s.ExternalId).ToList();
 
@@ -200,6 +209,123 @@ public sealed class RAGPipeline
                 return new RagPipelineResult
                 {
                     Answer = LlmOutputValidator.UngroundedAnswerMessage,
+                    SourceTodoIds = sourceIds,
+                    Model = model
+                };
+            }
+        }
+        catch
+        {
+            operation.SetOutcome(AiTelemetryNames.Outcomes.Error);
+            throw;
+        }
+    }
+
+    private async Task<RagPipelineResult> ExecuteKnowledgeAsync(
+        RagPipelineRequest request,
+        string model,
+        AiOperationScope operation,
+        CancellationToken cancellationToken)
+    {
+        var sources = request.Sources;
+        var sourceIds = sources.Select(s => s.ExternalId).ToList();
+
+        try
+        {
+            if (sources.Count == 0)
+            {
+                operation.SetOutcome(AiTelemetryNames.Outcomes.InsufficientContext);
+                _telemetry.RecordQualityEvent(
+                    AiTelemetryNames.Features.KnowledgeRag,
+                    AiTelemetryNames.QualityEvents.InsufficientContext);
+
+                return new RagPipelineResult
+                {
+                    Answer = LlmOutputValidator.InsufficientKnowledgeContextMessage,
+                    SourceTodoIds = sourceIds,
+                    Model = model
+                };
+            }
+
+            var sanitizedQuestion = PromptInputSanitizer.SanitizeAndTruncate(
+                request.Question, LlmInputLimits.ToolSearchQueryMaxLength * 4);
+            if (string.IsNullOrWhiteSpace(sanitizedQuestion))
+            {
+                operation.SetOutcome(AiTelemetryNames.Outcomes.ValidationFailed);
+                _telemetry.RecordQualityEvent(
+                    AiTelemetryNames.Features.KnowledgeRag,
+                    AiTelemetryNames.QualityEvents.ValidationFailed);
+
+                return new RagPipelineResult
+                {
+                    Answer = LlmOutputValidator.InsufficientKnowledgeContextMessage,
+                    SourceTodoIds = sourceIds,
+                    Model = model
+                };
+            }
+
+            var contextBuilder = new StringBuilder();
+            foreach (var source in sources)
+            {
+                if (contextBuilder.Length >= LlmInputLimits.RagTotalContextMaxLength)
+                {
+                    break;
+                }
+
+                var title = PromptInputSanitizer.SanitizeAndTruncate(source.Title, LlmInputLimits.TitleMaxLength);
+                var content = PromptInputSanitizer.SanitizeAndTruncate(
+                    source.Content, LlmInputLimits.RagContextDescriptionMaxLength);
+                contextBuilder.AppendLine($"- [{source.ExternalId}] {title}");
+                if (!string.IsNullOrWhiteSpace(content))
+                {
+                    var remaining = LlmInputLimits.RagTotalContextMaxLength - contextBuilder.Length;
+                    if (remaining <= 0)
+                    {
+                        break;
+                    }
+
+                    var clipped = content.Length <= remaining ? content : content[..remaining];
+                    contextBuilder.AppendLine($"  {clipped}");
+                }
+            }
+
+            var prompt = $"""
+                You are a knowledge-base assistant. Answer the user's question using ONLY the provided document chunks.
+                If the context is insufficient, say what is missing. Be concise and cite chunk titles with their ids.
+                Do not invent GUIDs. Only reference ids that appear in the document context.
+                When listing or quoting, cite ONLY chunks that match the question. If none match, say so clearly.
+
+                Document context:
+                {contextBuilder}
+
+                Question: {sanitizedQuestion}
+                """;
+
+            _logger.LogInformation("Running knowledge RAG with {Count} sources", sources.Count);
+            var answer = await _llm.GetCompletionAsync(prompt, cancellationToken);
+
+            try
+            {
+                var validated = LlmOutputValidator.ValidateRagAnswer(answer, sourceIds);
+                operation.SetOutcome(AiTelemetryNames.Outcomes.Success);
+                return new RagPipelineResult
+                {
+                    Answer = validated,
+                    SourceTodoIds = sourceIds,
+                    Model = model
+                };
+            }
+            catch (InvalidOperationException ex)
+            {
+                _logger.LogWarning(ex, "Knowledge RAG answer failed faithfulness validation");
+                operation.SetOutcome(AiTelemetryNames.Outcomes.ValidationFailed);
+                _telemetry.RecordQualityEvent(
+                    AiTelemetryNames.Features.KnowledgeRag,
+                    AiTelemetryNames.QualityEvents.UngroundedAnswer);
+
+                return new RagPipelineResult
+                {
+                    Answer = LlmOutputValidator.UngroundedKnowledgeAnswerMessage,
                     SourceTodoIds = sourceIds,
                     Model = model
                 };

@@ -21,6 +21,7 @@ public static class AiTelemetryNames
         public const string Classify = "classify";
         public const string Summarize = "summarize";
         public const string Rag = "rag";
+        public const string KnowledgeRag = "knowledge_rag";
         public const string ProposeTools = "propose_tools";
         public const string ExecuteTools = "execute_tools";
         public const string SprintOptimizer = "sprint_optimizer";

@@ -23,6 +23,10 @@ namespace Fistix.TaskManager.DataLayer
       services.AddScoped<ISprintRepository, SprintRepository>();
       services.AddScoped<IAiBatchJobRepository, AiBatchJobRepository>();
       services.AddScoped<ISprintOptimizerJobRepository, SprintOptimizerJobRepository>();
+      services.AddScoped<IKnowledgeDocumentRepository, KnowledgeDocumentRepository>();
+      services.AddScoped<IKnowledgeChunkRepository, KnowledgeChunkRepository>();
+      services.AddScoped<IKnowledgeChunkEmbeddingRepository, KnowledgeChunkEmbeddingRepository>();
+      services.AddScoped<IKnowledgeIngestJobRepository, KnowledgeIngestJobRepository>();
       services.AddScoped<IUserProfileRepository, UserProfileRepository>();
       services.AddScoped<IRepositoryFactory, RepositoryFactory>();
     }

@@ -96,4 +96,43 @@ public class RAGPipelineFaithfulnessTests
 
         Assert.Contains(sourceId.ToString(), result.Answer, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public async Task KnowledgeEmptySources_DoesNotCallLlm()
+    {
+        var llm = new FakeLlm { Response = "should not be used" };
+        var pipeline = new RAGPipeline(llm, new AiConfiguration { Provider = "ollama" }, NullLogger<RAGPipeline>.Instance);
+
+        var result = await pipeline.ExecuteAsync(new RagPipelineRequest
+        {
+            Question = "What does the doc say?",
+            CorpusKind = RagCorpusKind.Knowledge,
+            Sources = []
+        });
+
+        Assert.Equal(0, llm.CallCount);
+        Assert.Equal(LlmOutputValidator.InsufficientKnowledgeContextMessage, result.Answer);
+    }
+
+    [Fact]
+    public async Task KnowledgeUngroundedGuid_ReplacesAnswer()
+    {
+        var sourceId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+        var foreign = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var llm = new FakeLlm { Response = $"See chunk {foreign} for details." };
+        var pipeline = new RAGPipeline(llm, new AiConfiguration { Provider = "ollama" }, NullLogger<RAGPipeline>.Instance);
+
+        var result = await pipeline.ExecuteAsync(new RagPipelineRequest
+        {
+            Question = "What does it say?",
+            CorpusKind = RagCorpusKind.Knowledge,
+            Sources =
+            [
+                new RagSource { ExternalId = sourceId, Title = "notes.md #1", Content = "Auth0 login notes" }
+            ]
+        });
+
+        Assert.Equal(1, llm.CallCount);
+        Assert.Equal(LlmOutputValidator.UngroundedKnowledgeAnswerMessage, result.Answer);
+    }
 }

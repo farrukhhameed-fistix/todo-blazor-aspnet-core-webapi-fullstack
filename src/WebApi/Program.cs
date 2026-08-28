@@ -90,5 +90,6 @@ app.MapHub<ClassificationHub>(ClassificationHub.HubPath);
 app.MapHub<AiBatchHub>(AiBatchHub.HubPath);
 app.MapHub<SprintOptimizerHub>(SprintOptimizerHub.HubPath);
 app.MapHub<VoiceTranscribeHub>(VoiceTranscribeHub.HubPath);
+app.MapHub<KnowledgeIngestHub>(KnowledgeIngestHub.HubPath);
 
 await app.RunAsync();

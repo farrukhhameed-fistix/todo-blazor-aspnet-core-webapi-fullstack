@@ -51,6 +51,8 @@ namespace Fistix.TaskManager.WebApp
       services.AddScoped<AiBatchHubService>();
       services.AddScoped<SprintOptimizerHubService>();
       services.AddScoped<VoiceTranscribeHubService>();
+      services.AddScoped<KnowledgeDataService>();
+      services.AddScoped<KnowledgeIngestHubService>();
       services.AddScoped<ThemeService>();
     }
   }

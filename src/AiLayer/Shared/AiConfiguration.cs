@@ -196,6 +196,9 @@ public class AiFeaturesConfiguration
     public bool EnableRag { get; set; } = false;
     public RagConfiguration Rag { get; set; } = new();
     public AiRateLimitConfiguration RagRateLimit { get; set; } = new();
+    public bool EnableKnowledgeRag { get; set; } = false;
+    public KnowledgeRagConfiguration KnowledgeRag { get; set; } = new();
+    public AiRateLimitConfiguration KnowledgeRagRateLimit { get; set; } = new();
     public bool EnableFunctionCalling { get; set; } = false;
     public AiRateLimitConfiguration FunctionCallingRateLimit { get; set; } = new();
     public bool EnableAgents { get; set; } = false;
@@ -241,4 +244,20 @@ public class RagConfiguration
 {
     /// <summary>Max todos passed into the LLM after structured filters + search.</summary>
     public int RetrievalLimit { get; set; } = 5;
+}
+
+/// <summary>Document Knowledge Lab ingest and retrieval knobs.</summary>
+public class KnowledgeRagConfiguration
+{
+    public int MaxUploadBytes { get; set; } = 2 * 1024 * 1024;
+
+    public int ChunkSize { get; set; } = 800;
+
+    public int ChunkOverlap { get; set; } = 100;
+
+    public int RetrievalLimit { get; set; } = 5;
+
+    public double MinSimilarity { get; set; } = 0.45;
+
+    public int StuckAfterSeconds { get; set; } = 120;
 }
