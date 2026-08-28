@@ -4,6 +4,8 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Fistix.TaskManager.AiLayer.Observability;
+using Fistix.TaskManager.AiLayer.Shared;
 using Fistix.TaskManager.Core.Abstractions.Repositories;
 using Fistix.TaskManager.Core.Abstractions.Services;
 using Fistix.TaskManager.Core.DomainModel.Constants;
@@ -11,6 +13,7 @@ using Fistix.TaskManager.Core.Exceptions;
 using Fistix.TaskManager.Core.SecurityModel;
 using Fistix.TaskManager.ServiceLayer.Notifications;
 using Fistix.TaskManager.ViewModel.Commands.Todos;
+using Fistix.TaskManager.ViewModel.Dtos;
 using MediatR;
 
 namespace Fistix.TaskManager.ServiceLayer.Todos;
@@ -22,17 +25,23 @@ public sealed class ApproveSprintOptimizerProposalCommandHandler
     private readonly ICurrentUserService _currentUserService;
     private readonly ISprintOptimizerNotifier _notifier;
     private readonly SprintOptimizerPersistService _persistService;
+    private readonly IAiTelemetry _telemetry;
+    private readonly AiConfiguration _aiConfig;
 
     public ApproveSprintOptimizerProposalCommandHandler(
         ISprintOptimizerJobRepository jobRepository,
         ICurrentUserService currentUserService,
         ISprintOptimizerNotifier notifier,
-        SprintOptimizerPersistService persistService)
+        SprintOptimizerPersistService persistService,
+        IAiTelemetry? telemetry = null,
+        AiConfiguration? aiConfig = null)
     {
         _jobRepository = jobRepository;
         _currentUserService = currentUserService;
         _notifier = notifier;
         _persistService = persistService;
+        _telemetry = telemetry ?? NullAiTelemetry.Instance;
+        _aiConfig = aiConfig ?? new AiConfiguration();
     }
 
     public async Task<ApproveSprintOptimizerProposalCommandResult> Handle(
@@ -69,6 +78,9 @@ public sealed class ApproveSprintOptimizerProposalCommandHandler
             ? command.SelectedTaskExternalIds
             : proposal.SelectedTasks.Select(t => t.ExternalId).ToList();
 
+        var proposalEdited = command.SelectedTaskExternalIds.Count > 0
+            && !command.SelectedTaskExternalIds.SequenceEqual(proposal.SelectedTasks.Select(t => t.ExternalId));
+
         var selectedTodos = await _persistService.ResolveSelectedTodosAsync(
             job.CreatedByUserId,
             idsToUse,
@@ -79,6 +91,27 @@ public sealed class ApproveSprintOptimizerProposalCommandHandler
         {
             throw new InvalidOperationException("No valid tasks selected for sprint approval.");
         }
+
+        var rejectedUnknownIds = idsToUse.Count - selectedTodos.Count;
+        if (proposalEdited)
+        {
+            _telemetry.RecordQualityEvent(
+                AiTelemetryNames.Features.SprintOptimizer,
+                AiTelemetryNames.QualityEvents.ProposalEdited);
+        }
+
+        proposal.DecisionRecord = new SprintDecisionRecordDto
+        {
+            PromptVersion = AiPromptVersions.SprintOptimizer,
+            ModelId = string.IsNullOrWhiteSpace(_aiConfig.Agents?.ChatModel)
+                ? _aiConfig.Provider
+                : _aiConfig.Agents.ChatModel,
+            ToolInvocationCount = proposal.Steps.Count,
+            RejectedUnknownIdCount = Math.Max(0, rejectedUnknownIds),
+            UsedHeuristicFallback = proposal.UsedHeuristicFallback,
+            ProposalEditedByUser = proposalEdited,
+            ApprovalRejected = false
+        };
 
         job.CurrentPhase = SprintOptimizerPhase.Persisting;
         job.StatusMessage = "Creating sprint from approved proposal…";
@@ -95,6 +128,8 @@ public sealed class ApproveSprintOptimizerProposalCommandHandler
 
         job.ResultJson = SprintOptimizerJobMapper.SerializeResult(response);
         job.ProposalJson = null;
+        job.CheckpointJson = null;
+        job.PendingRequestId = null;
         job.Status = AiBatchJobStatus.Completed;
         job.CurrentPhase = SprintOptimizerPhase.Done;
         job.StatusMessage = $"Sprint created with {response.SelectedTasks.Count} tasks.";
@@ -114,15 +149,18 @@ public sealed class RejectSprintOptimizerProposalCommandHandler
     private readonly ISprintOptimizerJobRepository _jobRepository;
     private readonly ICurrentUserService _currentUserService;
     private readonly ISprintOptimizerNotifier _notifier;
+    private readonly IAiTelemetry _telemetry;
 
     public RejectSprintOptimizerProposalCommandHandler(
         ISprintOptimizerJobRepository jobRepository,
         ICurrentUserService currentUserService,
-        ISprintOptimizerNotifier notifier)
+        ISprintOptimizerNotifier notifier,
+        IAiTelemetry? telemetry = null)
     {
         _jobRepository = jobRepository;
         _currentUserService = currentUserService;
         _notifier = notifier;
+        _telemetry = telemetry ?? NullAiTelemetry.Instance;
     }
 
     public async Task<RejectSprintOptimizerProposalCommandResult> Handle(
@@ -151,10 +189,16 @@ public sealed class RejectSprintOptimizerProposalCommandHandler
             throw new InvalidOperationException($"Job is not awaiting approval (status {job.Status}).");
         }
 
+        _telemetry.RecordQualityEvent(
+            AiTelemetryNames.Features.SprintOptimizer,
+            AiTelemetryNames.QualityEvents.ApprovalRejected);
+
         job.Status = AiBatchJobStatus.Cancelled;
         job.CurrentPhase = SprintOptimizerPhase.Done;
         job.StatusMessage = "Proposal rejected by user.";
         job.ProposalJson = null;
+        job.CheckpointJson = null;
+        job.PendingRequestId = null;
         job.CompletedAt = DateTime.UtcNow;
         await _jobRepository.UpdateAsync(job, cancellationToken);
 

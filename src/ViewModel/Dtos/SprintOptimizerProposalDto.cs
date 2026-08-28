@@ -16,4 +16,5 @@ public class SprintOptimizerProposalDto
     public string? Theme { get; set; }
     public bool UsedHeuristicFallback { get; set; }
     public DateTime ProposedAt { get; set; } = DateTime.UtcNow;
+    public SprintDecisionRecordDto? DecisionRecord { get; set; }
 }

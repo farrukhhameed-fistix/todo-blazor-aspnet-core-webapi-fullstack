@@ -51,6 +51,8 @@ public static class AiTelemetryNames
         public const string ToolArgRejected = "tool_arg_rejected";
         public const string BudgetExceeded = "budget_exceeded";
         public const string UngroundedAnswer = "ungrounded_answer";
+        public const string ApprovalRejected = "approval_rejected";
+        public const string ProposalEdited = "proposal_edited";
     }
 
     public static class ConfidenceBands
