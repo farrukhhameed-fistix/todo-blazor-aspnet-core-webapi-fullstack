@@ -108,25 +108,34 @@ Quality metrics on the same meter: `ai.quality.events` (validation_failed, insuf
 
 ## AI validation and evaluation
 
-**Realtime (every request):** deterministic C# gates — input sanitize, schema/arg validation, RAG refuse-on-empty + Guid grounding, tool allowlist + status allowlist, sprint tool/time budgets. LLM-as-judge is **not** on the hot path.
+**Realtime (every request):** deterministic C# gates — not an LLM judge on the hot path.
 
-**Offline eval fixtures:**
+| Gate | Where it applies |
+|------|------------------|
+| `PromptInputSanitizer` | User/LLM-bound text (summarize, classify, RAG, tools, voice, Knowledge Lab) |
+| Output validators (`LlmOutputValidator`) | Summary length/empty; RAG refuse-on-empty; Guid / faithfulness grounding (todos + Knowledge Lab); agent text bounds |
+| Classification guardrails | Keyword/confidence overrides after the model suggests priority |
+| Tool allowlist + `ToolArgumentValidator` | Propose **and** execute; status allowlists where relevant |
+| Sprint tool / time budgets | Cap invocations, recovery passes, job timeout / stuck detection |
+
+`LlmJudgeService` exists for **offline** RAG Triad scoring only — it is not registered on Ask / Knowledge Lab request paths.
+
+**Offline fixtures + harnesses** (`src/AiLayer/Evaluation/`):
 
 | File | Purpose |
 |------|---------|
-| [`samples/ai-eval-todos.csv`](samples/ai-eval-todos.csv) | Classify accuracy (`ExpectedPriority`) |
-| [`samples/ai-eval-rag.json`](samples/ai-eval-rag.json) | RAG Triad fixtures (recall / insufficient) |
-| [`samples/ai-eval-tool-proposals.json`](samples/ai-eval-tool-proposals.json) | Tool name + arg schema fixtures |
+| [`samples/ai-eval-todos.csv`](samples/ai-eval-todos.csv) | Classify labels (`ExpectedPriority`) + safety-ish rows |
+| [`samples/ai-eval-rag.json`](samples/ai-eval-rag.json) | Todo RAG Triad (context recall / insufficient / ungrounded) |
+| [`samples/ai-eval-tool-proposals.json`](samples/ai-eval-tool-proposals.json) | Expected tool names + arg schema |
+| [`samples/knowledge-lab/`](samples/knowledge-lab/) | Manual Knowledge Lab matrices (ingest / hybrid / rewrite gaps) — not a CI harness |
 
-Harness code lives under `src/AiLayer/Evaluation/`. Unit tests in `AiLayer.Tests` run with mocks. For a live LLM classify pass:
+**What CI actually runs:** `AiLayer.Tests` loads fixtures and scores with **mocks / heuristics / guardrails-only** (no live LLM). That checks harness wiring and deterministic legs (e.g. insufficient-context message, tool schema fail), not production model quality.
 
 ```bash
-export AI_EVAL_LIVE=1
-# then run a small console/script that calls ClassificationPipeline per CSV row
-dotnet test src/Tests/AiLayer.Tests --filter ClassificationAccuracyHarness
+dotnet test src/Tests/AiLayer.Tests --filter "FullyQualifiedName~ClassificationAccuracyHarnessTests|FullyQualifiedName~RagTriadEvaluatorTests|FullyQualifiedName~ToolProposalEvalHarnessTests|FullyQualifiedName~LlmJudgeServiceTests"
 ```
 
-Agent budgets (`Ai:Agents`): `MaxToolInvocationsPerJob` (12), `MaxPlannerRecoveryPasses` (1), `JobTimeoutSeconds` (240), plus existing `StuckAfterSeconds` (300).
+`AI_EVAL_LIVE=1` is reserved on `ClassificationAccuracyHarness` for a future live classify pass; it is **not** wired into the tests above yet.
 
 ## MCP (Claude Desktop)
 
@@ -138,6 +147,7 @@ Setup: [`docs/mcp/README.md`](docs/mcp/README.md).
 - Secrets via **user-secrets** / env vars — never commit keys.  
 - Aspire injects `ConnectionStrings__MainDb`; don’t run Compose Postgres and Aspire Postgres together unless intentional.  
 - Prefer `Ai:Agents:ChatModel` = `gemini-2.5-flash` (or OpenAI) for tool-calling agents.  
+- Agent budgets (`Ai:Agents`): `MaxToolInvocationsPerJob` (12), `MaxPlannerRecoveryPasses` (1), `JobTimeoutSeconds` (240), `StuckAfterSeconds` (300).  
 - More Aspire detail: [`docs/aspire/README.md`](docs/aspire/README.md).
 
 ## License
