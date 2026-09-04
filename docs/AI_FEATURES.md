@@ -1,6 +1,9 @@
 # AI Features — Implementation Details
 
-Production-oriented notes for AI features in this codebase. Shared posture: **feature flags, JWT + access guards, sanitize inputs, validate outputs, rate-limit hot paths, prefer refuse/filter over trusting the model.**
+Per-feature notes for AI **functionality and implementation** in this codebase (APIs, flows, gates, primary code).  
+Project overview, stack, providers, OTel, and eval posture: root [`README.md`](../README.md).
+
+Shared posture: **feature flags, JWT + access guards, sanitize inputs, validate outputs, rate-limit hot paths, prefer refuse/filter over trusting the model.**
 
 ---
 
@@ -63,7 +66,7 @@ Generation (`RAGPipeline`) does **not** retrieve — callers pass already-filter
 - Full claim-level faithfulness (GUID grounding only).
 - Perfect NLU routing (phrase heuristics for intent/dates).
 - Multi-tenant SaaS hardening beyond owner/admin scoping in this app.
-- Document / handbook RAG — that is **Knowledge Lab** (§7).
+- Document / handbook RAG — that is **Knowledge Lab** (§2).
 
 ### Primary code
 
@@ -74,7 +77,86 @@ Generation (`RAGPipeline`) does **not** retrieve — callers pass already-filter
 
 ---
 
-## 2. Summarization
+## 2. Knowledge Lab (advanced / document RAG)
+
+**What:** Upload owner-scoped documents → chunk + embed → natural-language Ask over the document corpus (optional unified Ask with todos). Rich RAG **trace** for demos and debugging.  
+**API** (`KnowledgeController`, `[Authorize]`):  
+- `POST /api/ai/knowledge/documents` — multipart upload (`.txt` / `.md`; `.pdf` when enabled)  
+- `GET /api/ai/knowledge/documents`, `GET .../documents/{id}`, `GET .../documents/{id}/chunks`, `DELETE .../documents/{id}`  
+- `GET /api/ai/knowledge/ingest/{jobId}` — poll ingest job  
+- `POST /api/ai/knowledge/query` — Ask (+ optional `DocumentExternalId`, `IncludeTodos`)  
+**SignalR:** `KnowledgeIngestHub` (`/hubs/knowledge-ingest`) — `IngestJobUpdated` for UI progress (owner-scoped group).  
+**Flag:** `Ai:Features:EnableKnowledgeRag` (also requires `EnableEmbeddings`)  
+**Rate limit:** `ai-knowledge-rag` on upload + query  
+**Knobs:** `Ai:Features:KnowledgeRag` (chunk size/overlap, retrieval limit, MinSimilarity, hybrid/RRF, query rewrite, agentic second retrieve, PDF ingest, re-ingest)
+
+### Design goal
+
+Document RAG with the **same security posture as todo Ask**: owner scope in code, retrieve before generate, refuse empty / ungrounded answers — plus an ingest lifecycle demos usually skip.
+
+### Request flow
+
+**Ingest**
+
+```
+POST documents → UploadKnowledgeDocumentCommandHandler
+  → validate type/size (± PDF text extract)
+  → optional re-ingest (same filename replaces prior doc)
+  → KnowledgeDocument (Pending) + KnowledgeIngestJob
+  → background: parse → TextChunker → embed → Ready / Failed
+  → SignalR IngestJobUpdated (+ GET poll)
+```
+
+**Ask**
+
+```
+POST query → KnowledgeQueryCommandHandler
+  → sanitize question; optional LLM query rewrite
+  → KnowledgeSemanticSearchPipeline (vector ± FTS + RRF, owner + doc filter)
+  → optional todo semantic hits when IncludeTodos
+  → RAGPipeline (CorpusKind Knowledge | Unified)
+  → optional agentic round 2 if insufficient context
+  → answer + sources + KnowledgeRagTraceDto
+```
+
+| Decision | Why |
+|----------|-----|
+| Shared `RAGPipeline` with `RagCorpusKind.Knowledge` / `Unified` | One generate+validate path; corpus kind picks prompts / refuse messages |
+| Owner filter + document chip resolved to `ExternalId` in code | Scope is authz, not a prompt hint |
+| Optional hybrid (vector + Postgres FTS → RRF) | Exact tokens (env vars, ticket ids) + paraphrases |
+| Optional query rewrite | Better retrieval for paraphrased / underspecified questions |
+| Optional agentic second retrieve | Recover when round 1 returns insufficient context (excludes already-used chunks) |
+| Optional PDF ingest (`PdfTextExtractor`) | Handbook demos without forcing markdown-only |
+| Optional re-ingest by filename | Replace stale chunks instead of silently accumulating duplicates |
+| Trace: rewrite, rounds, hybrid flags, hits, outcome | Debuggable RAG for portfolio / ops — judge still off hot path |
+| Ingest job + stuck-after + SignalR | Long embed runs are operable; UI can subscribe or poll Ready |
+
+### Safety & controls
+
+**Ingress:** JWT; flag → 503; FluentValidation on query; upload size cap (`MaxUploadBytes`); rate limit on upload/query.  
+**Authz:** `KnowledgeAccessGuard` / owner on documents and jobs; todo branch uses owner-scoped semantic search; ingest hub joins owner-scoped groups.  
+**Input:** `PromptInputSanitizer` on question and rewrite output.  
+**Output:** Empty / weak context → fixed insufficient message; faithfulness validation → ungrounded message (`LlmOutputValidator`).  
+**Ops:** OTel feature `knowledge_rag`; prompt version `rag.knowledge.v1`; samples under `samples/knowledge-lab/`.
+
+### What this is *not* claiming
+
+- Cross-encoder rerank or GraphRAG.
+- Perfect PDF layout/table extraction.
+- Unified Ask as a replacement for todo-only Ask filters (dates/priority still live on `/api/ai/query`).
+
+### Primary code
+
+- API: `KnowledgeController`
+- Ingest: `UploadKnowledgeDocumentCommandHandler`, `KnowledgeIngestProcessor`, `TextChunker`, `PdfTextExtractor`
+- Notify: `KnowledgeIngestHub`, `SignalRKnowledgeIngestNotifier`
+- Ask: `KnowledgeQueryCommandHandler`, `KnowledgeQueryRewriter`, `KnowledgeSemanticSearchPipeline`
+- Generate: `RAGPipeline` (`RagCorpusKind.Knowledge` / `Unified`)
+- Data: `IKnowledgeDocumentRepository`, `IKnowledgeChunkEmbeddingRepository`, `IKnowledgeLexicalSearchRepository`
+
+---
+
+## 3. Summarization
 
 **What:** Short AI summary of a todo’s title/description; cached in AI metadata. Client sends task id (+ optional `Force`), not free text.  
 **API:** `POST /api/ai/summarize`  
@@ -120,7 +202,7 @@ Client → SummarizeTodoTaskCommandHandler
 
 ---
 
-## 3. Classification (+ apply-priority)
+## 4. Classification (+ apply-priority)
 
 **What:** Suggest priority (`HIGH` / `MEDIUM` / `LOW`) + confidence + reason; user must apply. Auto-queued on create when enabled; SignalR for progress.  
 **API:**  
@@ -170,7 +252,7 @@ POST apply-priority → completed suggestion → todo.Priority (user confirm)
 
 ---
 
-## 4. Embeddings indexing
+## 5. Embeddings indexing
 
 **What:** Index todo title+description → vector (default local ONNX `bge-small-en-v1.5`, 384-d) in **pgvector**. Foundation for semantic search and RAG.  
 **API:** none (side effect of create/update, batch, startup backfill)  
@@ -211,7 +293,7 @@ No public embed API. Text from DB only. Vectors not returned to clients. OTel on
 
 ---
 
-## 5. Semantic search
+## 6. Semantic search
 
 **What:** Natural-language similarity search over indexed todos; optional hybrid vector + FTS → RRF.  
 **API:** `POST /api/ai/todos/search/semantic`  
@@ -258,7 +340,7 @@ Client → SemanticSearchTodosCommandHandler
 
 ---
 
-## 6. Function calling / tools
+## 7. Function calling / tools
 
 **What:** Two-step: LLM **proposes** tool calls; user **confirms**; server executes allowlisted tools.  
 **API:** `POST /api/ai/propose-tools`, `POST /api/ai/execute-tools`  
@@ -305,102 +387,34 @@ execute → ToolExecutor
 
 ---
 
-## 7. Knowledge Lab (advanced / document RAG)
-
-**What:** Upload owner-scoped documents → chunk + embed → natural-language Ask over the document corpus (optional unified Ask with todos). Rich RAG **trace** for demos and debugging.  
-**API** (`KnowledgeController`, `[Authorize]`):  
-- `POST /api/ai/knowledge/documents` — multipart upload (`.txt` / `.md`; `.pdf` when enabled)  
-- `GET /api/ai/knowledge/documents`, `GET .../documents/{id}`, `GET .../documents/{id}/chunks`, `DELETE .../documents/{id}`  
-- `GET /api/ai/knowledge/ingest/{jobId}` — poll ingest job  
-- `POST /api/ai/knowledge/query` — Ask (+ optional `DocumentExternalId`, `IncludeTodos`)  
-**Flag:** `Ai:Features:EnableKnowledgeRag` (also requires `EnableEmbeddings`)  
-**Rate limit:** `ai-knowledge-rag` on upload + query  
-**Knobs:** `Ai:Features:KnowledgeRag` (chunk size/overlap, retrieval limit, MinSimilarity, hybrid/RRF, query rewrite, agentic second retrieve, PDF ingest, re-ingest)
-
-### Design goal
-
-Document RAG with the **same security posture as todo Ask**: owner scope in code, retrieve before generate, refuse empty / ungrounded answers — plus an ingest lifecycle demos usually skip.
-
-### Request flow
-
-**Ingest**
-
-```
-POST documents → UploadKnowledgeDocumentCommandHandler
-  → validate type/size (± PDF text extract)
-  → optional re-ingest (same filename replaces prior doc)
-  → KnowledgeDocument (Pending) + KnowledgeIngestJob
-  → background: parse → TextChunker → embed → Ready / Failed
-```
-
-**Ask**
-
-```
-POST query → KnowledgeQueryCommandHandler
-  → sanitize question; optional LLM query rewrite
-  → KnowledgeSemanticSearchPipeline (vector ± FTS + RRF, owner + doc filter)
-  → optional todo semantic hits when IncludeTodos
-  → RAGPipeline (CorpusKind Knowledge | Unified)
-  → optional agentic round 2 if insufficient context
-  → answer + sources + KnowledgeRagTraceDto
-```
-
-| Decision | Why |
-|----------|-----|
-| Shared `RAGPipeline` with `RagCorpusKind.Knowledge` / `Unified` | One generate+validate path; corpus kind picks prompts / refuse messages |
-| Owner filter + document chip resolved to `ExternalId` in code | Scope is authz, not a prompt hint |
-| Optional hybrid (vector + Postgres FTS → RRF) | Exact tokens (env vars, ticket ids) + paraphrases |
-| Optional query rewrite | Better retrieval for paraphrased / underspecified questions |
-| Optional agentic second retrieve | Recover when round 1 returns insufficient context (excludes already-used chunks) |
-| Optional PDF ingest (`PdfTextExtractor`) | Handbook demos without forcing markdown-only |
-| Optional re-ingest by filename | Replace stale chunks instead of silently accumulating duplicates |
-| Trace: rewrite, rounds, hybrid flags, hits, outcome | Debuggable RAG for portfolio / ops — judge still off hot path |
-| Ingest job + stuck-after | Long embed runs are operable; UI can poll Ready |
-
-### Safety & controls
-
-**Ingress:** JWT; flag → 503; FluentValidation on query; upload size cap (`MaxUploadBytes`); rate limit on upload/query.  
-**Authz:** `KnowledgeAccessGuard` / owner on documents and jobs; todo branch uses owner-scoped semantic search.  
-**Input:** `PromptInputSanitizer` on question and rewrite output.  
-**Output:** Empty / weak context → fixed insufficient message; faithfulness validation → ungrounded message (`LlmOutputValidator`).  
-**Ops:** OTel feature `knowledge_rag`; prompt version `rag.knowledge.v1`; samples under `samples/knowledge-lab/`.
-
-### What this is *not* claiming
-
-- Cross-encoder rerank or GraphRAG.
-- Perfect PDF layout/table extraction.
-- Unified Ask as a replacement for todo-only Ask filters (dates/priority still live on `/api/ai/query`).
-
-### Primary code
-
-- API: `KnowledgeController`
-- Ingest: `UploadKnowledgeDocumentCommandHandler`, `KnowledgeIngestProcessor`, `TextChunker`, `PdfTextExtractor`
-- Ask: `KnowledgeQueryCommandHandler`, `KnowledgeQueryRewriter`, `KnowledgeSemanticSearchPipeline`
-- Generate: `RAGPipeline` (`RagCorpusKind.Knowledge` / `Unified`)
-- Data: `IKnowledgeDocumentRepository`, `IKnowledgeChunkEmbeddingRepository`, `IKnowledgeLexicalSearchRepository`
-
----
-
 ## 8. Agents / Microsoft Agent Framework (sprint optimizer)
 
-**What:** Async MAF job: Analyst → Planner (or single agent) selects todos and can create a sprint; SignalR progress; cancel/poll. Heuristic fallback if the agent fails or hits budget.  
+**What:** Async MAF job: Analyst → Planner (or single-agent mode) plans a sprint from owner-scoped todos; SignalR progress; **stops at a proposal** until the user approves or rejects. Heuristic fallback if the agent fails or hits budget.  
 **API:**  
-- `POST /api/ai/agent/sprint-optimizer`  
-- `GET .../active`, `GET .../{jobExternalId}`, `POST .../{id}/cancel`  
+- `POST /api/ai/agent/sprint-optimizer` — start (rate-limited)  
+- `GET .../active`, `GET .../{jobExternalId}` — poll  
+- `POST .../{jobExternalId}/cancel`  
+- `POST .../{jobExternalId}/approve` — persist sprint from proposal (optional edited task id list)  
+- `POST .../{jobExternalId}/reject` — discard proposal  
+**SignalR:** `SprintOptimizerHub` (`/hubs/sprint-optimizer`) — `SprintOptimizerUpdated`  
 **Flag:** `Ai:Features:EnableAgents` (start)  
-**Rate limit:** `ai-agents` on **start** only
+**Rate limit:** `ai-agents` on **start** only  
+**Budgets:** `Ai:Agents` — `MaxToolInvocationsPerJob`, `MaxPlannerRecoveryPasses`, `JobTimeoutSeconds`, `StuckAfterSeconds` (optional `ChatModel` override for agents only)
 
 ### Design goal
 
-Multi-step planning with **tool budgets, real GUID tools, and durable job state** — not a free-form chat agent.
+Multi-step planning with **tool budgets, real GUID tools, durable job state, and human approval before persist** — not a free-form chat agent that writes sprints autonomously.
 
 ### Request flow
 
 ```
 POST optimize → queue job (one active / user)
   → SprintOptimizerAgent + SprintPlanningTools (owner-scoped)
-  → propose_sprint_plan (reject unknown ids) → create_sprint
+  → propose_sprint_plan (reject unknown ids)  [Planner does NOT create_sprint]
+  → status AwaitingApproval + ProposalJson
   → SignalR + GET poll; cancel supported
+  → user POST approve (optional SelectedTaskExternalIds) → create sprint
+     or POST reject → clear proposal
 ```
 
 | Decision | Why |
@@ -409,25 +423,29 @@ POST optimize → queue job (one active / user)
 | One active job per owner | Prevents pile-up / cost storms |
 | Tools must use real candidate GUIDs | Stops invented ids |
 | Max tool invocations + job timeout | Hard cost/latency caps |
-| Heuristic fallback | User still gets a plan when MAF fails |
+| Heuristic fallback | User still gets a reviewable plan when MAF fails |
+| Stop at `AwaitingApproval` | Propose ≠ persist — same product posture as tools |
+| Approve may re-resolve / edit selected ids | User can trim the proposal; unknown ids dropped; telemetry `proposal_edited` |
 
 ### Safety & controls
 
-**Ingress:** JWT; flag → 503; clamps on maxTasks/duration; rate limit on start; 409 if active job exists.  
-**Authz:** owner-scoped candidates; job get/cancel ownership checks.  
-**Output:** agent text validated; unknown ids rejected.  
-**Ops:** OTel agent/budget; SignalR hub auth via current user.
+**Ingress:** JWT; flag → 503 on start; clamps on maxTasks/duration; rate limit on start; 409 if active job exists.  
+**Authz:** owner-scoped candidates; get/cancel/approve/reject ownership checks (admin override).  
+**Output:** agent text validated; unknown ids rejected at propose and again on approve.  
+**Ops:** OTel agent/budget/quality; SignalR hub auth via current user.
 
 ### What this is *not* claiming
 
 - Optimal sprint-planning quality.
-- Feature flag on GET/cancel (start is gated; reads/cancel remain authz-scoped).
+- Feature flag on GET/cancel/approve/reject (start is gated; those remain authz-scoped).
+- That the Planner tool `create_sprint` runs during the agent loop — persist is approval-only.
 
 ### Primary code
 
 - `OptimizeSprintCommandHandler`, `SprintOptimizerAgent`, `SprintOptimizerWorkflowHost`, `SprintPlanningTools`
-- `SprintOptimizerBackgroundService`, SignalR hub/notifier
-
+- `SprintOptimizerBackgroundService`, `SprintOptimizerPersistService`
+- `ApproveSprintOptimizerProposalCommandHandler`, `RejectSprintOptimizerProposalCommandHandler`
+- `SprintOptimizerHub` / notifier, `SprintOptimizerJobMapper`
 ---
 
 ## 9. MCP
@@ -585,8 +603,8 @@ Hold Dictate (VoiceTodoCommandComponent)
 | Embeddings | `EnableEmbeddings` | — |
 | Semantic search | `EnableSemanticSearch` + embeddings | `ai-semantic-search` |
 | RAG (todos) | `EnableRag` | `ai-rag` |
-| Tools | `EnableFunctionCalling` | `ai-function-calling` |
 | Knowledge Lab | `EnableKnowledgeRag` + embeddings | `ai-knowledge-rag` (upload + query) |
+| Tools | `EnableFunctionCalling` | `ai-function-calling` |
 | Agents (MAF) | `EnableAgents` | `ai-agents` (start) |
 | Voice STT | `EnableVoiceTranscription` | `ai-transcribe` |
 | Voice local captions | `Ai:SpeechToText:EnableLocalLiveCaptions` | (hub; Speaches) |

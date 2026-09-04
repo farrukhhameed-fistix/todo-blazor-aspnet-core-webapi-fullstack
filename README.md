@@ -16,7 +16,7 @@ A full-stack **task manager** used to demonstrate practical **AI engineering wit
 | Advanced RAG | **Knowledge Lab** — upload docs, chunk + embed, scoped Ask with RAG trace |
 | Function calling | Propose ≠ execute tool actions against the API |
 | Voice | Hold-to-talk STT (Web Speech / local Whisper) → same tool pipeline |
-| Agents (MAF) | **Microsoft Agent Framework** Analyst → Planner sprint workflow |
+| Agents (MAF) | **Microsoft Agent Framework** Analyst → Planner; user approves before sprint persist |
 | MCP | Standalone MCP server for Claude Desktop |
 | Multi-provider LLMs | Google Gemini, OpenAI, Azure OpenAI, Claude, Ollama |
 
@@ -81,7 +81,7 @@ Without Aspire: `docker compose up -d` (Postgres on **5433**), set `ConnectionSt
 ## AI features (in the UI)
 
 - **Todos** — create/edit tasks; AI summary + priority classification; semantic search toggle; hold-to-talk voice overlay (STT → tools)  
-- **AI Chat** — Ask (RAG over todos), Tools (function calling), Optimize Sprint (**MAF** multi-agent)  
+- **AI Chat** — Ask (RAG over todos), Tools (function calling), Optimize Sprint (**MAF** propose → approve/reject)  
 - **Knowledge Lab** — upload `.txt`/`.md`, ingest/chunk/embed, scoped document Ask with retrieval trace  
 - **Sprints** — list/detail of agent-created sprint plans  
 
