@@ -29,6 +29,15 @@ public class SprintOptimizerJob : Entity
 
     public string? LastError { get; set; }
 
+    /// <summary>JSON of SprintOptimizerProposalDto while awaiting approval.</summary>
+    public string? ProposalJson { get; set; }
+
+    /// <summary>JSON of SprintOptimizerCheckpointDto for worker resume.</summary>
+    public string? CheckpointJson { get; set; }
+
+    /// <summary>MAF workflow checkpoint id when using WorkflowBuilder resume.</summary>
+    public string? PendingRequestId { get; set; }
+
     /// <summary>JSON of OptimizeSprintResponseDto when completed.</summary>
     public string? ResultJson { get; set; }
 

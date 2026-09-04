@@ -7,9 +7,14 @@ namespace Fistix.TaskManager.ServiceLayer.Knowledge;
 
 public sealed record TextChunk(int Ordinal, string Content, string? Heading);
 
-/// <summary>Fixed-size splitter with overlap; prefers whitespace near the cut.</summary>
+/// <summary>
+/// Fixed-size splitter with overlap; prefers markdown headings, table row ends, then whitespace.
+/// </summary>
 public static class TextChunker
 {
+    /// <summary>Matches <c>KnowledgeChunk.Heading</c> EF max length.</summary>
+    public const int MaxHeadingLength = 500;
+
     public static IReadOnlyList<TextChunk> Split(string? text, int chunkSize, int chunkOverlap)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -74,6 +79,24 @@ public static class TextChunker
 
     private static int FindBreak(ReadOnlySpan<char> window)
     {
+        // Prefer a markdown heading start near the end of the window (next chunk keeps the heading).
+        for (var i = window.Length - 1; i >= window.Length / 4; i--)
+        {
+            if (window[i] == '\n' && i + 1 < window.Length && window[i + 1] == '#')
+            {
+                return i + 1;
+            }
+        }
+
+        // Prefer end of a markdown table row.
+        for (var i = window.Length - 1; i >= window.Length / 4; i--)
+        {
+            if (window[i] == '\n' && LooksLikeTableRowEnd(window, i))
+            {
+                return i + 1;
+            }
+        }
+
         for (var i = window.Length - 1; i >= 0; i--)
         {
             if (window[i] == '\n')
@@ -93,18 +116,58 @@ public static class TextChunker
         return window.Length;
     }
 
+    private static bool LooksLikeTableRowEnd(ReadOnlySpan<char> window, int newlineIndex)
+    {
+        var lineStart = newlineIndex;
+        while (lineStart > 0 && window[lineStart - 1] != '\n')
+        {
+            lineStart--;
+        }
+
+        var line = window[lineStart..newlineIndex].Trim();
+        return line.Length > 0 && line[0] == '|' && line[^1] == '|';
+    }
+
     private static string? ExtractHeading(string content)
     {
         foreach (var rawLine in content.Split('\n'))
         {
             var line = rawLine.Trim();
-            if (line.StartsWith('#') && line.Length > 1)
+            if (!TryParseMarkdownHeading(line, out var heading))
             {
-                var heading = line.TrimStart('#').Trim();
-                return string.IsNullOrWhiteSpace(heading) ? null : heading;
+                continue;
             }
+
+            return TruncateHeading(heading);
         }
 
         return null;
     }
+
+    /// <summary>Accepts <c># Title</c> … <c>###### Title</c>; rejects bare <c>#</c> or hash-tags without space.</summary>
+    private static bool TryParseMarkdownHeading(string line, out string heading)
+    {
+        heading = string.Empty;
+        if (line.Length < 3 || line[0] != '#')
+        {
+            return false;
+        }
+
+        var i = 0;
+        while (i < line.Length && i < 6 && line[i] == '#')
+        {
+            i++;
+        }
+
+        if (i == 0 || i >= line.Length || !char.IsWhiteSpace(line[i]))
+        {
+            return false;
+        }
+
+        heading = line[i..].Trim();
+        return !string.IsNullOrWhiteSpace(heading);
+    }
+
+    private static string TruncateHeading(string heading) =>
+        heading.Length <= MaxHeadingLength ? heading : heading[..MaxHeadingLength];
 }

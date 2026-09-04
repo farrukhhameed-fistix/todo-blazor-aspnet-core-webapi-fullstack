@@ -121,6 +121,11 @@ public sealed class CancelSprintOptimizerJobCommandHandler
             return new CancelSprintOptimizerJobCommandResult { Payload = SprintOptimizerJobMapper.ToDto(job) };
         }
 
+        if (job.Status is AiBatchJobStatus.AwaitingApproval)
+        {
+            job.ProposalJson = null;
+        }
+
         job.CancelRequested = true;
         job.Status = AiBatchJobStatus.Cancelled;
         job.StatusMessage = "Cancelled by user.";

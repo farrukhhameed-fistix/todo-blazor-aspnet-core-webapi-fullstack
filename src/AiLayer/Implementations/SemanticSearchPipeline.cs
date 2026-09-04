@@ -186,7 +186,7 @@ public sealed class SemanticSearchPipeline
         }
 
         var fused = HybridSearchFusion.FuseRrf(strongVector, lexicalHits, cfg.RrfK);
-        var blended = HybridSearchFusion.BlendAndTake(fused, limit);
+        var blended = HybridSearchFusion.BlendAndTakeAsVectorHits(fused, limit);
 
         _logger.LogInformation(
             "Hybrid fuse vector={VectorCount} lexical={LexicalCount} fused={FusedCount} out={OutCount}",

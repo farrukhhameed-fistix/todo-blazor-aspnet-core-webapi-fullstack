@@ -33,6 +33,8 @@ public static class SprintOptimizerJobMapper
             }
         }
 
+        var proposal = DeserializeProposal(job.ProposalJson);
+
         return new SprintOptimizerJobDto
         {
             ExternalId = job.ExternalId,
@@ -49,9 +51,30 @@ public static class SprintOptimizerJobMapper
             StartedAt = job.StartedAt,
             HeartbeatAt = job.HeartbeatAt,
             CompletedAt = job.CompletedAt,
+            Proposal = proposal,
             Result = result
         };
     }
+
+    public static SprintOptimizerProposalDto? DeserializeProposal(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<SprintOptimizerProposalDto>(json, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    public static string SerializeProposal(SprintOptimizerProposalDto proposal) =>
+        JsonSerializer.Serialize(proposal, JsonOptions);
 
     public static string SerializeResult(OptimizeSprintResponseDto result) =>
         JsonSerializer.Serialize(result, JsonOptions);

@@ -4,6 +4,9 @@ using Fistix.TaskManager.AiLayer.Abstractions;
 
 namespace Fistix.TaskManager.AiLayer.Implementations;
 
+/// <summary>Neutral ranked hit used by RRF fusion (todos, knowledge chunks, etc.).</summary>
+public sealed record RankedHit(Guid ExternalId, int InternalId, double Score);
+
 /// <summary>Reciprocal Rank Fusion and light score blending for hybrid retrieval.</summary>
 public static class HybridSearchFusion
 {
@@ -11,8 +14,8 @@ public static class HybridSearchFusion
     /// RRF: score(d) = Σ 1/(k + rank_i(d)) with 1-based ranks.
     /// </summary>
     public static IReadOnlyList<FusedCandidate> FuseRrf(
-        IReadOnlyList<VectorSearchHit> vectorHits,
-        IReadOnlyList<LexicalSearchHit> lexicalHits,
+        IReadOnlyList<RankedHit> vectorHits,
+        IReadOnlyList<RankedHit> lexicalHits,
         int rrfK)
     {
         var k = Math.Max(1, rrfK);
@@ -22,50 +25,60 @@ public static class HybridSearchFusion
         {
             var hit = vectorHits[i];
             var rank = i + 1;
-            if (!byId.TryGetValue(hit.TodoExternalId, out var c))
+            if (!byId.TryGetValue(hit.ExternalId, out var c))
             {
-                c = new FusedCandidate(hit.TodoExternalId, hit.TodoId);
-                byId[hit.TodoExternalId] = c;
+                c = new FusedCandidate(hit.ExternalId, hit.InternalId);
+                byId[hit.ExternalId] = c;
             }
 
             c.RrfScore += 1.0 / (k + rank);
-            c.VectorSimilarity = hit.Similarity;
-            c.TodoId = hit.TodoId;
+            c.VectorSimilarity = hit.Score;
+            c.InternalId = hit.InternalId;
         }
 
         for (var i = 0; i < lexicalHits.Count; i++)
         {
             var hit = lexicalHits[i];
             var rank = i + 1;
-            if (!byId.TryGetValue(hit.TodoExternalId, out var c))
+            if (!byId.TryGetValue(hit.ExternalId, out var c))
             {
-                c = new FusedCandidate(hit.TodoExternalId, hit.TodoId);
-                byId[hit.TodoExternalId] = c;
+                c = new FusedCandidate(hit.ExternalId, hit.InternalId);
+                byId[hit.ExternalId] = c;
             }
 
             c.RrfScore += 1.0 / (k + rank);
-            c.LexicalRank = hit.Rank;
-            c.TodoId = hit.TodoId;
+            c.LexicalRank = hit.Score;
+            c.InternalId = hit.InternalId;
         }
 
         return byId.Values.ToList();
     }
 
+    /// <summary>Todo-shaped convenience overload.</summary>
+    public static IReadOnlyList<FusedCandidate> FuseRrf(
+        IReadOnlyList<VectorSearchHit> vectorHits,
+        IReadOnlyList<LexicalSearchHit> lexicalHits,
+        int rrfK) =>
+        FuseRrf(
+            vectorHits.Select(h => new RankedHit(h.TodoExternalId, h.TodoId, h.Similarity)).ToList(),
+            lexicalHits.Select(h => new RankedHit(h.TodoExternalId, h.TodoId, h.Rank)).ToList(),
+            rrfK);
+
     /// <summary>
     /// Sort by RRF plus a light boost from vector similarity and normalized FTS rank.
     /// Display Similarity is clamped to 0–1 for UI compatibility.
     /// </summary>
-    public static IReadOnlyList<VectorSearchHit> BlendAndTake(
+    public static IReadOnlyList<RankedHit> BlendAndTake(
         IReadOnlyList<FusedCandidate> fused,
         int limit)
     {
         if (fused.Count == 0 || limit <= 0)
         {
-            return Array.Empty<VectorSearchHit>();
+            return Array.Empty<RankedHit>();
         }
 
         var maxLexical = fused.Where(c => c.LexicalRank.HasValue).Select(c => c.LexicalRank!.Value).DefaultIfEmpty(0).Max();
-        var ranked = fused
+        return fused
             .Select(c =>
             {
                 var lexicalNorm = maxLexical > 0 && c.LexicalRank.HasValue
@@ -80,24 +93,40 @@ public static class HybridSearchFusion
             .OrderByDescending(x => x.blend)
             .ThenByDescending(x => x.display)
             .Take(limit)
-            .Select(x => new VectorSearchHit(x.c.TodoExternalId, x.c.TodoId, x.display))
+            .Select(x => new RankedHit(x.c.ExternalId, x.c.InternalId, x.display))
             .ToList();
-
-        return ranked;
     }
+
+    /// <summary>Todo-shaped convenience: returns <see cref="VectorSearchHit"/>.</summary>
+    public static IReadOnlyList<VectorSearchHit> BlendAndTakeAsVectorHits(
+        IReadOnlyList<FusedCandidate> fused,
+        int limit) =>
+        BlendAndTake(fused, limit)
+            .Select(h => new VectorSearchHit(h.ExternalId, h.InternalId, h.Score))
+            .ToList();
 }
 
 public sealed class FusedCandidate
 {
-    public FusedCandidate(Guid todoExternalId, int todoId)
+    public FusedCandidate(Guid externalId, int internalId)
     {
-        TodoExternalId = todoExternalId;
-        TodoId = todoId;
+        ExternalId = externalId;
+        InternalId = internalId;
     }
 
-    public Guid TodoExternalId { get; }
-    public int TodoId { get; set; }
+    public Guid ExternalId { get; }
+    public int InternalId { get; set; }
     public double RrfScore { get; set; }
     public double? VectorSimilarity { get; set; }
     public double? LexicalRank { get; set; }
+
+    /// <summary>Backward-compatible alias for todo pipelines.</summary>
+    public Guid TodoExternalId => ExternalId;
+
+    /// <summary>Backward-compatible alias for todo pipelines.</summary>
+    public int TodoId
+    {
+        get => InternalId;
+        set => InternalId = value;
+    }
 }

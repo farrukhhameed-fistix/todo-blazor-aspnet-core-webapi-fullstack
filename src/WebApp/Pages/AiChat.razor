@@ -105,11 +105,11 @@
 
     <MudStack Row="true" Spacing="2" Class="mb-3">
       <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                 Disabled="_loading || IsSprintJobRunning"
+                 Disabled="_loading || IsSprintJobActive"
                  OnClick="OptimizeSprintAsync">
         Optimize Sprint
       </MudButton>
-      @if (IsSprintJobRunning && _sprintJob is not null)
+      @if (IsSprintJobActive && _sprintJob is not null)
       {
         <MudButton Variant="Variant.Outlined" Color="Color.Error" Disabled="_loading"
                    OnClick="CancelSprintOptimizerAsync">
@@ -159,6 +159,74 @@
             }
           </MudTimeline>
         }
+      </MudPaper>
+    }
+    else if (_sprintJob is not null && _sprintJob.Status == "AwaitingApproval" && _sprintJob.Proposal is not null)
+    {
+      <MudPaper Class="pa-4 mb-3" Elevation="2" Style="max-width: 40rem;">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+          <MudIcon Icon="@Icons.Material.Filled.FactCheck" Color="Color.Warning" />
+          <MudText Typo="Typo.subtitle1">Review proposed sprint</MudText>
+          @if (_sprintJob.Proposal.UsedHeuristicFallback)
+          {
+            <MudChip T="string" Size="Size.Small" Color="Color.Warning">Heuristic fallback</MudChip>
+          }
+        </MudStack>
+        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-3">
+          @(_sprintJob.StatusMessage ?? "Approve to create the sprint, or reject to discard.")
+        </MudText>
+
+        @if (_sprintJob.Proposal.Steps.Count > 0)
+        {
+          <MudText Typo="Typo.subtitle2" Class="mb-2">Agent steps</MudText>
+          <MudTimeline TimelinePosition="TimelinePosition.Start" Class="mb-3">
+            @foreach (var step in _sprintJob.Proposal.Steps)
+            {
+              <MudTimelineItem Color="Color.Primary" Size="Size.Small">
+                <MudText Typo="Typo.body2">
+                  <strong>@step.AgentName</strong> / <code>@step.ToolName</code>
+                </MudText>
+              </MudTimelineItem>
+            }
+          </MudTimeline>
+        }
+
+        <MudText Typo="Typo.body2" Style="white-space: pre-wrap;" Class="mb-3">@_sprintJob.Proposal.Reasoning</MudText>
+
+        <MudText Typo="Typo.subtitle2" Class="mb-2">Selected tasks (@_approvalSelectedIds.Count / @_sprintJob.Proposal.SelectedTasks.Count)</MudText>
+        <MudList T="string" Dense="true" Class="mb-3">
+          @foreach (var task in _sprintJob.Proposal.SelectedTasks)
+          {
+            <MudListItem>
+              <MudCheckBox T="bool"
+                           Value="@IsApprovalTaskSelected(task.ExternalId)"
+                           ValueChanged="@(v => ToggleApprovalTask(task.ExternalId, v))"
+                           Color="Color.Primary">
+                <MudText Typo="Typo.body2">@task.Title</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                  @task.Priority · @task.Status
+                  @if (task.DueDate is not null)
+                  {
+                    <span>· due @task.DueDate.Value.ToString("yyyy-MM-dd")</span>
+                  }
+                </MudText>
+              </MudCheckBox>
+            </MudListItem>
+          }
+        </MudList>
+
+        <MudStack Row="true" Spacing="2">
+          <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                     Disabled="_loading || _approvalSelectedIds.Count == 0"
+                     OnClick="ApproveSprintProposalAsync">
+            Approve &amp; create sprint
+          </MudButton>
+          <MudButton Variant="Variant.Outlined" Color="Color.Error"
+                     Disabled="_loading"
+                     OnClick="RejectSprintProposalAsync">
+            Reject
+          </MudButton>
+        </MudStack>
       </MudPaper>
     }
     else if (_sprintJob is not null && _sprintJob.Status == "Failed")
@@ -303,14 +371,19 @@
   private ExecuteAiToolsResponseDto? _execution;
   private SprintOptimizerJobDto? _sprintJob;
   private OptimizeSprintResponseDto? _sprintResult;
+  private HashSet<Guid> _approvalSelectedIds = [];
   private CancellationTokenSource? _pollCts;
 
   private bool IsSprintJobRunning =>
     _sprintJob is not null
     && (_sprintJob.Status is "Pending" or "Running" or "Stuck");
 
+  private bool IsSprintJobActive =>
+    _sprintJob is not null
+    && (_sprintJob.Status is "Pending" or "Running" or "Stuck" or "AwaitingApproval");
+
   private IReadOnlyList<AgentStepDto> LiveSprintSteps =>
-    _sprintJob?.Result?.Steps ?? [];
+    _sprintJob?.Proposal?.Steps ?? _sprintJob?.Result?.Steps ?? [];
 
   protected override async Task OnInitializedAsync()
   {
@@ -384,10 +457,19 @@
   private void ApplySprintJob(SprintOptimizerJobDto dto)
   {
     _sprintJob = dto;
-    if (dto.Status == "Completed")
+    if (dto.Status == "AwaitingApproval" && dto.Proposal is not null)
     {
       _hubStatusMessage = null;
       StopFallbackPolling();
+      SyncApprovalSelection(dto.Proposal);
+      _sprintResult = null;
+      _error = null;
+    }
+    else if (dto.Status == "Completed")
+    {
+      _hubStatusMessage = null;
+      StopFallbackPolling();
+      _approvalSelectedIds.Clear();
       if (dto.Result is not null)
       {
         _sprintResult = dto.Result;
@@ -398,10 +480,30 @@
     {
       _hubStatusMessage = null;
       StopFallbackPolling();
+      _approvalSelectedIds.Clear();
       if (dto.Status == "Failed")
       {
         _error = dto.LastError ?? "Sprint optimizer failed.";
       }
+    }
+  }
+
+  private void SyncApprovalSelection(SprintOptimizerProposalDto proposal)
+  {
+    _approvalSelectedIds = proposal.SelectedTasks.Select(t => t.ExternalId).ToHashSet();
+  }
+
+  private bool IsApprovalTaskSelected(Guid externalId) => _approvalSelectedIds.Contains(externalId);
+
+  private void ToggleApprovalTask(Guid externalId, bool selected)
+  {
+    if (selected)
+    {
+      _approvalSelectedIds.Add(externalId);
+    }
+    else
+    {
+      _approvalSelectedIds.Remove(externalId);
     }
   }
 
@@ -628,6 +730,60 @@
       if (!result.IsSucceed || result.Payload is null)
       {
         _error = result.Message ?? "Failed to cancel sprint optimizer.";
+        return;
+      }
+
+      ApplySprintJob(result.Payload);
+    }
+    finally
+    {
+      _loading = false;
+    }
+  }
+
+  private async Task ApproveSprintProposalAsync()
+  {
+    if (_sprintJob is null || _approvalSelectedIds.Count == 0)
+    {
+      return;
+    }
+
+    _loading = true;
+    _error = null;
+    try
+    {
+      var result = await TodoDataService.ApproveSprintOptimizer(
+        _sprintJob.ExternalId,
+        _approvalSelectedIds.ToList());
+      if (!result.IsSucceed || result.Payload is null)
+      {
+        _error = result.Message ?? "Failed to approve sprint proposal.";
+        return;
+      }
+
+      ApplySprintJob(result.Payload);
+    }
+    finally
+    {
+      _loading = false;
+    }
+  }
+
+  private async Task RejectSprintProposalAsync()
+  {
+    if (_sprintJob is null)
+    {
+      return;
+    }
+
+    _loading = true;
+    _error = null;
+    try
+    {
+      var result = await TodoDataService.RejectSprintOptimizer(_sprintJob.ExternalId);
+      if (!result.IsSucceed || result.Payload is null)
+      {
+        _error = result.Message ?? "Failed to reject sprint proposal.";
         return;
       }
 

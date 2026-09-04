@@ -5,7 +5,8 @@ namespace Fistix.TaskManager.AiLayer.Models;
 public enum RagCorpusKind
 {
     Todos = 0,
-    Knowledge = 1
+    Knowledge = 1,
+    Unified = 2
 }
 
 public sealed class RagPipelineRequest

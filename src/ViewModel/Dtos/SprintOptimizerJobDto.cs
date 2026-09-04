@@ -23,4 +23,5 @@ public class SprintOptimizerJobDto
     public DateTime? HeartbeatAt { get; set; }
     public DateTime? CompletedAt { get; set; }
     public OptimizeSprintResponseDto? Result { get; set; }
+    public SprintOptimizerProposalDto? Proposal { get; set; }
 }

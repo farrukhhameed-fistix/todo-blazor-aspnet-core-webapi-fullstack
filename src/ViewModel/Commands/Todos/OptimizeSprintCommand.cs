@@ -30,6 +30,29 @@ public class CancelSprintOptimizerJobCommandResult
     public SprintOptimizerJobDto Payload { get; set; } = new();
 }
 
+public class ApproveSprintOptimizerProposalCommand : IRequest<ApproveSprintOptimizerProposalCommandResult>
+{
+    public Guid JobExternalId { get; set; }
+
+    /// <summary>Optional edited list of todo external ids. When empty, uses the stored proposal.</summary>
+    public List<Guid> SelectedTaskExternalIds { get; set; } = [];
+}
+
+public class ApproveSprintOptimizerProposalCommandResult
+{
+    public SprintOptimizerJobDto Payload { get; set; } = new();
+}
+
+public class RejectSprintOptimizerProposalCommand : IRequest<RejectSprintOptimizerProposalCommandResult>
+{
+    public Guid JobExternalId { get; set; }
+}
+
+public class RejectSprintOptimizerProposalCommandResult
+{
+    public SprintOptimizerJobDto Payload { get; set; } = new();
+}
+
 public class OptimizeSprintResponseDto
 {
     public Guid SprintId { get; set; }

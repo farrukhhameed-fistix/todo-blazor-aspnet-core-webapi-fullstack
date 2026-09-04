@@ -142,12 +142,18 @@ public sealed class KnowledgeIngestProcessor : IKnowledgeIngestProcessor
         var entities = new List<KnowledgeChunk>(pieces.Count);
         foreach (var piece in pieces)
         {
+            var heading = piece.Heading;
+            if (heading is { Length: > TextChunker.MaxHeadingLength })
+            {
+                heading = heading[..TextChunker.MaxHeadingLength];
+            }
+
             var chunk = new KnowledgeChunk
             {
                 DocumentId = document.Id,
                 Ordinal = piece.Ordinal,
                 Content = piece.Content,
-                Heading = piece.Heading,
+                Heading = heading,
                 CreatedAt = DateTime.UtcNow
             };
             chunk.GenerateNewExternalId();

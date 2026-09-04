@@ -26,7 +26,7 @@ public class HybridSearchFusionTests
         };
 
         var fused = HybridSearchFusion.FuseRrf(vector, lexical, rrfK: 60);
-        var blended = HybridSearchFusion.BlendAndTake(fused, limit: 3);
+        var blended = HybridSearchFusion.BlendAndTakeAsVectorHits(fused, limit: 3);
 
         Assert.Equal(3, blended.Count);
         Assert.Equal(shared, blended[0].TodoExternalId);
@@ -40,7 +40,7 @@ public class HybridSearchFusionTests
             .ToList();
 
         var fused = HybridSearchFusion.FuseRrf(vector, [], rrfK: 60);
-        var blended = HybridSearchFusion.BlendAndTake(fused, limit: 2);
+        var blended = HybridSearchFusion.BlendAndTakeAsVectorHits(fused, limit: 2);
 
         Assert.Equal(2, blended.Count);
     }
@@ -48,8 +48,24 @@ public class HybridSearchFusionTests
     [Fact]
     public void FuseRrf_EmptyInputs_ReturnsEmpty()
     {
-        var fused = HybridSearchFusion.FuseRrf([], [], rrfK: 60);
+        var fused = HybridSearchFusion.FuseRrf(
+            Array.Empty<RankedHit>(),
+            Array.Empty<RankedHit>(),
+            rrfK: 60);
         var blended = HybridSearchFusion.BlendAndTake(fused, limit: 10);
         Assert.Empty(blended);
+    }
+
+    [Fact]
+    public void FuseRrf_NeutralRankedHits_Works()
+    {
+        var shared = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+        var vector = new List<RankedHit> { new(shared, 10, 0.9), new(Guid.NewGuid(), 11, 0.5) };
+        var lexical = new List<RankedHit> { new(shared, 10, 1.0) };
+
+        var fused = HybridSearchFusion.FuseRrf(vector, lexical, rrfK: 60);
+        var blended = HybridSearchFusion.BlendAndTake(fused, limit: 2);
+
+        Assert.Equal(shared, blended[0].ExternalId);
     }
 }

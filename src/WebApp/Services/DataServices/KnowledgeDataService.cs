@@ -127,13 +127,15 @@ public sealed class KnowledgeDataService
     public async Task<ApiCallResult<KnowledgeQueryResponseDto>> QueryAsync(
         string question,
         Guid? documentExternalId,
+        bool includeTodos = false,
         CancellationToken cancellationToken = default)
     {
         var result = new ApiCallResult<KnowledgeQueryResponseDto>();
         var command = new KnowledgeQueryCommand
         {
             Question = question,
-            DocumentExternalId = documentExternalId
+            DocumentExternalId = documentExternalId,
+            IncludeTodos = includeTodos
         };
 
         var response = await _httpClient.PostAsJsonAsync("api/ai/knowledge/query", command, cancellationToken);

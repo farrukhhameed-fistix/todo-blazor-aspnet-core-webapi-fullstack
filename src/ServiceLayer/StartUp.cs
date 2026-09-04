@@ -4,6 +4,7 @@ using Fistix.TaskManager.Core.AutoMapperProfiles;
 using Fistix.TaskManager.Core.Config;
 using Fistix.TaskManager.DataLayer;
 using Fistix.TaskManager.ServiceLayer.Background;
+using Fistix.TaskManager.ServiceLayer.Knowledge;
 using Fistix.TaskManager.ServiceLayer.Notifications;
 using Fistix.TaskManager.ServiceLayer.Todos;
 using Fistix.TaskManager.ViewModel.Commands.Todos;
@@ -23,7 +24,11 @@ namespace Fistix.TaskManager.ServiceLayer
 
         services.AddScoped<IToolExecutor, ToolExecutor>();
       services.AddScoped<SprintPlanningTools>();
+      services.AddScoped<SprintCandidateLoader>();
+      services.AddScoped<SprintOptimizerCheckpointService>();
+      services.AddScoped<SprintOptimizerWorkflowHost>();
       services.AddScoped<SprintOptimizerAgent>();
+      services.AddScoped<SprintOptimizerPersistService>();
 
       services.AddSingleton<IClassificationQueue, ClassificationQueue>();
       services.AddScoped<IClassificationProcessor, ClassificationProcessor>();
@@ -40,6 +45,11 @@ namespace Fistix.TaskManager.ServiceLayer
       // SignalR notifier is registered by WebApi; tests register NullAiBatchNotifier.
       services.TryAddSingleton<IAiBatchNotifier, NullAiBatchNotifier>();
       services.TryAddSingleton<ISprintOptimizerNotifier, NullSprintOptimizerNotifier>();
+      services.TryAddSingleton<IKnowledgeIngestNotifier, NullKnowledgeIngestNotifier>();
+      services.AddScoped<IKnowledgeIngestProcessor, KnowledgeIngestProcessor>();
+      services.AddScoped<KnowledgeSemanticSearchPipeline>();
+      services.AddScoped<KnowledgeQueryRewriter>();
+      services.AddHostedService<KnowledgeIngestBackgroundService>();
       services.TryAddSingleton<IAiTelemetry>(_ => NullAiTelemetry.Instance);
       services.AddHostedService<SprintOptimizerBackgroundService>();
             

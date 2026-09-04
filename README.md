@@ -1,6 +1,6 @@
 # Task Manager — .NET AI Demo
 
-A full-stack **task manager** used to demonstrate practical **AI engineering with .NET**: LLM integrations, embeddings/RAG, agents, and MCP — on top of a clean Blazor + ASP.NET Core architecture.
+A full-stack **task manager** used to demonstrate practical **AI engineering with .NET**: LLM integrations, embeddings/RAG, Knowledge Lab, voice commands, agents, and MCP — on top of a clean Blazor + ASP.NET Core architecture.
 
 > Demo / portfolio project, not a production SaaS product.
 
@@ -11,14 +11,16 @@ A full-stack **task manager** used to demonstrate practical **AI engineering wit
 | Summarization | Short AI summaries of task descriptions |
 | Classification | Priority suggestions (guardrails + confidence) |
 | Embeddings | Local **ONNX** `bge-small-en-v1.5` (384-d) → **pgvector** |
-| Semantic search | Similarity search over todo embeddings |
-| RAG | Natural-language Q&A over the user’s tasks |
-| Function calling | Tool-style AI actions against the API |
-| Agents | **Microsoft Agent Framework** Analyst → Planner sprint workflow |
+| Semantic search | Similarity search over todo embeddings (optional hybrid + RRF) |
+| RAG | Natural-language Q&A over the user’s tasks (grounded / refuse-empty) |
+| Advanced RAG | **Knowledge Lab** — upload docs, chunk + embed, scoped Ask with RAG trace |
+| Function calling | Propose ≠ execute tool actions against the API |
+| Voice | Hold-to-talk STT (Web Speech / local Whisper) → same tool pipeline |
+| Agents (MAF) | **Microsoft Agent Framework** Analyst → Planner sprint workflow |
 | MCP | Standalone MCP server for Claude Desktop |
 | Multi-provider LLMs | Google Gemini, OpenAI, Azure OpenAI, Claude, Ollama |
 
-UI: MudBlazor Blazor WASM (todos, sprints, AI Chat). Orchestration: **.NET Aspire** (Postgres + WebApi + WebApp).
+UI: MudBlazor Blazor WASM (todos, sprints, AI Chat, Knowledge Lab, voice). Orchestration: **.NET Aspire** (Postgres + WebApi + WebApp + optional Speaches/Whisper).
 
 ## Architecture
 
@@ -78,11 +80,14 @@ Without Aspire: `docker compose up -d` (Postgres on **5433**), set `ConnectionSt
 
 ## AI features (in the UI)
 
-- **Todos** — create/edit tasks; AI summary + priority classification; semantic search toggle  
-- **AI Chat** — Ask (RAG), Tools (function calling), Optimize Sprint (multi-agent)  
+- **Todos** — create/edit tasks; AI summary + priority classification; semantic search toggle; hold-to-talk voice overlay (STT → tools)  
+- **AI Chat** — Ask (RAG over todos), Tools (function calling), Optimize Sprint (**MAF** multi-agent)  
+- **Knowledge Lab** — upload `.txt`/`.md`, ingest/chunk/embed, scoped document Ask with retrieval trace  
 - **Sprints** — list/detail of agent-created sprint plans  
 
-Feature flags live under `Ai:Features` in [`src/WebApi/appsettings.json`](src/WebApi/appsettings.json) (`EnableSummarization`, `EnableEmbeddings`, `EnableRag`, `EnableAgents`, …).
+Feature flags live under `Ai:Features` in [`src/WebApi/appsettings.json`](src/WebApi/appsettings.json) (`EnableSummarization`, `EnableEmbeddings`, `EnableRag`, `EnableKnowledgeRag`, `EnableFunctionCalling`, `EnableVoiceTranscription`, `EnableAgents`, …).
+
+Implementation notes: [`docs/AI_FEATURES.md`](docs/AI_FEATURES.md).
 
 ## AI observability (OpenTelemetry)
 

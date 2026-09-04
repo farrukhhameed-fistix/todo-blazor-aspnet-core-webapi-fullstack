@@ -12,6 +12,7 @@ using Fistix.TaskManager.AiLayer.Observability;
 using Fistix.TaskManager.AiLayer.Shared;
 using Fistix.TaskManager.Core.Abstractions.Repositories;
 using Fistix.TaskManager.Core.Abstractions.Services;
+using Fistix.TaskManager.Core.DomainModel.Aggregates;
 using Fistix.TaskManager.Core.Exceptions;
 using Fistix.TaskManager.Core.SecurityModel;
 using Fistix.TaskManager.ViewModel.Commands.Knowledge;
@@ -26,8 +27,11 @@ public sealed class KnowledgeQueryCommandHandler
 {
     private readonly RAGPipeline _ragPipeline;
     private readonly IEmbeddingService _embeddingService;
+    private readonly KnowledgeSemanticSearchPipeline _searchPipeline;
+    private readonly KnowledgeQueryRewriter _rewriter;
+    private readonly SemanticSearchPipeline _todoSearchPipeline;
+    private readonly ITodoTaskRepository _todoTasks;
     private readonly IKnowledgeDocumentRepository _documents;
-    private readonly IKnowledgeChunkEmbeddingRepository _embeddings;
     private readonly ICurrentUserService _currentUserService;
     private readonly AiConfiguration _aiConfig;
     private readonly ILogger<KnowledgeQueryCommandHandler> _logger;
@@ -35,16 +39,22 @@ public sealed class KnowledgeQueryCommandHandler
     public KnowledgeQueryCommandHandler(
         RAGPipeline ragPipeline,
         IEmbeddingService embeddingService,
+        KnowledgeSemanticSearchPipeline searchPipeline,
+        KnowledgeQueryRewriter rewriter,
+        SemanticSearchPipeline todoSearchPipeline,
+        ITodoTaskRepository todoTasks,
         IKnowledgeDocumentRepository documents,
-        IKnowledgeChunkEmbeddingRepository embeddings,
         ICurrentUserService currentUserService,
         AiConfiguration aiConfig,
         ILogger<KnowledgeQueryCommandHandler> logger)
     {
         _ragPipeline = ragPipeline;
         _embeddingService = embeddingService;
+        _searchPipeline = searchPipeline;
+        _rewriter = rewriter;
+        _todoSearchPipeline = todoSearchPipeline;
+        _todoTasks = todoTasks;
         _documents = documents;
-        _embeddings = embeddings;
         _currentUserService = currentUserService;
         _aiConfig = aiConfig;
         _logger = logger;
@@ -67,7 +77,7 @@ public sealed class KnowledgeQueryCommandHandler
         var userId = TodoAccessGuard.RequireCurrentUserId(_currentUserService);
         var cfg = _aiConfig.Features.KnowledgeRag ?? new KnowledgeRagConfiguration();
         var retrievalLimit = Math.Clamp(cfg.RetrievalLimit <= 0 ? 5 : cfg.RetrievalLimit, 1, 25);
-        var minSimilarity = cfg.MinSimilarity;
+        var includeTodos = command.IncludeTodos;
 
         Guid? documentFilter = null;
         if (command.DocumentExternalId.HasValue && command.DocumentExternalId.Value != Guid.Empty)
@@ -83,7 +93,9 @@ public sealed class KnowledgeQueryCommandHandler
         var trace = new KnowledgeRagTraceDto
         {
             SanitizedQuestion = sanitizedQuestion,
-            EmbeddingModel = _embeddingService.ModelName
+            EmbeddingModel = _embeddingService.ModelName,
+            HybridEnabled = cfg.HybridEnabled,
+            IncludeTodos = includeTodos
         };
 
         if (string.IsNullOrWhiteSpace(sanitizedQuestion))
@@ -91,73 +103,218 @@ public sealed class KnowledgeQueryCommandHandler
             var empty = await _ragPipeline.ExecuteAsync(new RagPipelineRequest
             {
                 Question = command.Question,
-                CorpusKind = RagCorpusKind.Knowledge,
+                CorpusKind = includeTodos ? RagCorpusKind.Unified : RagCorpusKind.Knowledge,
                 Sources = []
             }, cancellationToken);
 
             trace.Outcome = AiTelemetryNames.Outcomes.ValidationFailed;
             trace.ChatModel = empty.Model;
-            return new KnowledgeQueryCommandResult
-            {
-                Payload = new KnowledgeQueryResponseDto
-                {
-                    Answer = empty.Answer,
-                    Model = empty.Model,
-                    Trace = trace
-                }
-            };
+            return Result(empty.Answer, empty.Model, [], trace);
         }
 
-        var queryEmbedding = await _embeddingService.GenerateEmbeddingAsync(
-            sanitizedQuestion,
-            EmbeddingInputKind.Query,
-            cancellationToken);
-
-        var hits = await _embeddings.SearchSimilarAsync(
-            queryEmbedding,
-            _embeddingService.ModelName,
-            userId,
-            retrievalLimit * 2,
-            cancellationToken,
-            documentFilter);
-
-        var kept = hits
-            .Select(h => new
+        var searchQuery = sanitizedQuestion;
+        if (cfg.EnableQueryRewrite)
+        {
+            searchQuery = await _rewriter.RewriteAsync(sanitizedQuestion, missingHint: null, cancellationToken);
+            if (!string.Equals(searchQuery, sanitizedQuestion, StringComparison.Ordinal))
             {
-                Hit = h,
-                Similarity = Math.Max(0, 1.0 - h.Distance)
-            })
-            .Where(x => x.Similarity >= minSimilarity)
-            .Take(retrievalLimit)
+                trace.RewrittenQuery = searchQuery;
+            }
+        }
+
+        var usedChunkIds = new HashSet<Guid>();
+        var kept = new List<KnowledgeRetrievedChunk>();
+        KnowledgeSemanticSearchResult? lastSearch = null;
+        var round = 1;
+
+        lastSearch = await RetrieveDocsAsync(
+            searchQuery, userId, documentFilter, retrievalLimit, usedChunkIds, cancellationToken);
+        kept.AddRange(lastSearch.Hits);
+        foreach (var h in lastSearch.Hits)
+        {
+            usedChunkIds.Add(h.ChunkExternalId);
+        }
+
+        RecordRound(trace, round, searchQuery, lastSearch);
+
+        var todoSources = includeTodos
+            ? await RetrieveTodosAsync(searchQuery, userId, Math.Max(3, retrievalLimit / 2), cancellationToken)
+            : [];
+
+        var rag = await GenerateAsync(sanitizedQuestion, kept, todoSources, includeTodos, cancellationToken);
+        ApplyOutcome(trace, rag);
+
+        if (cfg.EnableAgenticRetrieve
+            && string.Equals(trace.Outcome, AiTelemetryNames.Outcomes.InsufficientContext, StringComparison.Ordinal)
+            && round < 2)
+        {
+            round = 2;
+            var secondQuery = await _rewriter.RewriteAsync(
+                sanitizedQuestion,
+                missingHint: "Need additional document chunks; prior answer was insufficient.",
+                cancellationToken);
+            if (!string.IsNullOrWhiteSpace(secondQuery))
+            {
+                searchQuery = secondQuery;
+                trace.RewrittenQuery = secondQuery;
+            }
+
+            var second = await RetrieveDocsAsync(
+                searchQuery, userId, documentFilter, retrievalLimit, usedChunkIds, cancellationToken);
+            lastSearch = second;
+            foreach (var h in second.Hits)
+            {
+                if (usedChunkIds.Add(h.ChunkExternalId))
+                {
+                    kept.Add(h);
+                }
+            }
+
+            RecordRound(trace, round, searchQuery, second);
+
+            if (includeTodos && todoSources.Count == 0)
+            {
+                todoSources = await RetrieveTodosAsync(searchQuery, userId, Math.Max(3, retrievalLimit / 2), cancellationToken);
+            }
+
+            rag = await GenerateAsync(sanitizedQuestion, kept, todoSources, includeTodos, cancellationToken);
+            ApplyOutcome(trace, rag);
+        }
+
+        trace.RetrieveRounds = round;
+        trace.HitCount = kept.Count + todoSources.Count;
+        trace.VectorCandidateCount = lastSearch?.VectorCandidateCount ?? 0;
+        trace.LexicalCandidateCount = lastSearch?.LexicalCandidateCount ?? 0;
+        trace.ChatModel = rag.Model;
+        trace.Hits = kept.Select(ToTraceHit).Concat(todoSources.Select(ToTodoTraceHit)).ToList();
+
+        var sourceDtos = kept.Select(ToSourceDto)
+            .Concat(todoSources.Select(ToTodoSourceDto))
             .ToList();
 
-        trace.HitCount = kept.Count;
-        trace.Hits = kept.Select(x => new KnowledgeRagTraceHitDto
-        {
-            ChunkExternalId = x.Hit.ChunkExternalId,
-            DocumentExternalId = x.Hit.DocumentExternalId,
-            FileName = x.Hit.FileName,
-            Ordinal = x.Hit.Ordinal,
-            Similarity = x.Similarity
-        }).ToList();
+        _logger.LogInformation(
+            "Knowledge RAG answered with {HitCount} sources, rounds={Rounds}, hybrid={Hybrid}, todos={Todos}, outcome {Outcome}",
+            sourceDtos.Count,
+            round,
+            cfg.HybridEnabled,
+            includeTodos,
+            trace.Outcome);
 
-        var sources = kept.Select(x => new RagSource
-        {
-            ExternalId = x.Hit.ChunkExternalId,
-            Title = string.IsNullOrWhiteSpace(x.Hit.Heading)
-                ? $"{x.Hit.FileName} #{x.Hit.Ordinal + 1}"
-                : $"{x.Hit.FileName} — {x.Hit.Heading}",
-            Content = x.Hit.Content
-        }).ToList();
+        return Result(rag.Answer, rag.Model, sourceDtos, trace);
+    }
 
-        var rag = await _ragPipeline.ExecuteAsync(new RagPipelineRequest
+    private async Task<KnowledgeSemanticSearchResult> RetrieveDocsAsync(
+        string query,
+        Guid userId,
+        Guid? documentFilter,
+        int limit,
+        HashSet<Guid> exclude,
+        CancellationToken cancellationToken) =>
+        await _searchPipeline.ExecuteAsync(new KnowledgeSemanticSearchRequest
         {
-            Question = sanitizedQuestion,
-            CorpusKind = RagCorpusKind.Knowledge,
-            Sources = sources
+            Query = query,
+            OwnerExternalId = userId,
+            DocumentExternalId = documentFilter,
+            Limit = limit,
+            ExcludeChunkExternalIds = exclude.Count == 0 ? null : exclude
         }, cancellationToken);
 
-        trace.ChatModel = rag.Model;
+    private async Task<List<TodoRagItem>> RetrieveTodosAsync(
+        string query,
+        Guid userId,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        if (!_aiConfig.Features.EnableRag && !_aiConfig.Features.EnableEmbeddings)
+        {
+            return [];
+        }
+
+        var search = await _todoSearchPipeline.ExecuteAsync(new SemanticSearchPipelineRequest
+        {
+            Query = query,
+            Limit = limit,
+            OwnerExternalId = userId
+        }, cancellationToken);
+
+        if (search.Hits.Count == 0)
+        {
+            return [];
+        }
+
+        var todos = await _todoTasks.GetByOwner(userId, cancellationToken);
+        var byId = todos.ToDictionary(t => t.ExternalId);
+        var items = new List<TodoRagItem>();
+        foreach (var hit in search.Hits)
+        {
+            if (!byId.TryGetValue(hit.TodoExternalId, out var todo))
+            {
+                continue;
+            }
+
+            items.Add(new TodoRagItem
+            {
+                ExternalId = todo.ExternalId,
+                Title = todo.Title ?? string.Empty,
+                Description = todo.Description,
+                Similarity = hit.Similarity
+            });
+        }
+
+        return items;
+    }
+
+    private async Task<RagPipelineResult> GenerateAsync(
+        string question,
+        IReadOnlyList<KnowledgeRetrievedChunk> docs,
+        IReadOnlyList<TodoRagItem> todos,
+        bool includeTodos,
+        CancellationToken cancellationToken)
+    {
+        var sources = docs.Select(d => new RagSource
+        {
+            ExternalId = d.ChunkExternalId,
+            Title = string.IsNullOrWhiteSpace(d.Heading)
+                ? $"{d.FileName} #{d.Ordinal + 1}"
+                : $"{d.FileName} — {d.Heading}",
+            Content = d.Content
+        }).ToList();
+
+        foreach (var todo in todos)
+        {
+            sources.Add(new RagSource
+            {
+                ExternalId = todo.ExternalId,
+                Title = $"Todo: {todo.Title}",
+                Content = string.IsNullOrWhiteSpace(todo.Description) ? todo.Title : $"{todo.Title}\n{todo.Description}"
+            });
+        }
+
+        return await _ragPipeline.ExecuteAsync(new RagPipelineRequest
+        {
+            Question = question,
+            CorpusKind = includeTodos ? RagCorpusKind.Unified : RagCorpusKind.Knowledge,
+            Sources = sources
+        }, cancellationToken);
+    }
+
+    private static void RecordRound(
+        KnowledgeRagTraceDto trace,
+        int round,
+        string searchQuery,
+        KnowledgeSemanticSearchResult search)
+    {
+        trace.Rounds.Add(new KnowledgeRagRetrieveRoundDto
+        {
+            Round = round,
+            SearchQuery = searchQuery,
+            HitCount = search.Hits.Count,
+            CandidateCount = search.VectorCandidateCount + search.LexicalCandidateCount
+        });
+    }
+
+    private static void ApplyOutcome(KnowledgeRagTraceDto trace, RagPipelineResult rag)
+    {
         if (string.Equals(rag.Answer, LlmOutputValidator.InsufficientKnowledgeContextMessage, StringComparison.Ordinal))
         {
             trace.Outcome = AiTelemetryNames.Outcomes.InsufficientContext;
@@ -170,38 +327,86 @@ public sealed class KnowledgeQueryCommandHandler
         {
             trace.Outcome = AiTelemetryNames.Outcomes.Success;
         }
+    }
 
-        var sourceDtos = kept.Select(x => new KnowledgeQuerySourceDto
-        {
-            ChunkExternalId = x.Hit.ChunkExternalId,
-            DocumentExternalId = x.Hit.DocumentExternalId,
-            FileName = x.Hit.FileName,
-            Ordinal = x.Hit.Ordinal,
-            Heading = x.Hit.Heading,
-            Snippet = TruncateSnippet(x.Hit.Content),
-            Similarity = x.Similarity
-        }).ToList();
-
-        _logger.LogInformation(
-            "Knowledge RAG answered with {HitCount} chunks, outcome {Outcome}",
-            kept.Count,
-            trace.Outcome);
-
-        return new KnowledgeQueryCommandResult
+    private static KnowledgeQueryCommandResult Result(
+        string answer,
+        string model,
+        List<KnowledgeQuerySourceDto> sources,
+        KnowledgeRagTraceDto trace) =>
+        new()
         {
             Payload = new KnowledgeQueryResponseDto
             {
-                Answer = rag.Answer,
-                Model = rag.Model,
-                Sources = sourceDtos,
+                Answer = answer,
+                Model = model,
+                Sources = sources,
                 Trace = trace
             }
         };
-    }
+
+    private static KnowledgeRagTraceHitDto ToTraceHit(KnowledgeRetrievedChunk x) =>
+        new()
+        {
+            ChunkExternalId = x.ChunkExternalId,
+            DocumentExternalId = x.DocumentExternalId,
+            FileName = x.FileName,
+            Ordinal = x.Ordinal,
+            Similarity = x.Similarity,
+            FromVector = x.FromVector,
+            FromLexical = x.FromLexical,
+            SourceKind = "document"
+        };
+
+    private static KnowledgeRagTraceHitDto ToTodoTraceHit(TodoRagItem x) =>
+        new()
+        {
+            ChunkExternalId = x.ExternalId,
+            DocumentExternalId = Guid.Empty,
+            FileName = x.Title,
+            Ordinal = 0,
+            Similarity = x.Similarity,
+            FromVector = true,
+            SourceKind = "todo"
+        };
+
+    private static KnowledgeQuerySourceDto ToSourceDto(KnowledgeRetrievedChunk x) =>
+        new()
+        {
+            ChunkExternalId = x.ChunkExternalId,
+            DocumentExternalId = x.DocumentExternalId,
+            FileName = x.FileName,
+            Ordinal = x.Ordinal,
+            Heading = x.Heading,
+            Snippet = TruncateSnippet(x.Content),
+            Similarity = x.Similarity,
+            SourceKind = "document"
+        };
+
+    private static KnowledgeQuerySourceDto ToTodoSourceDto(TodoRagItem x) =>
+        new()
+        {
+            ChunkExternalId = x.ExternalId,
+            DocumentExternalId = Guid.Empty,
+            FileName = x.Title,
+            Ordinal = 0,
+            Heading = "Todo",
+            Snippet = TruncateSnippet(x.Description ?? x.Title),
+            Similarity = x.Similarity,
+            SourceKind = "todo"
+        };
 
     private static string TruncateSnippet(string content)
     {
         var trimmed = content.Trim().Replace("\n", " ", StringComparison.Ordinal);
         return trimmed.Length <= 240 ? trimmed : trimmed[..240] + "…";
+    }
+
+    private sealed class TodoRagItem
+    {
+        public Guid ExternalId { get; set; }
+        public string Title { get; set; } = string.Empty;
+        public string? Description { get; set; }
+        public double Similarity { get; set; }
     }
 }

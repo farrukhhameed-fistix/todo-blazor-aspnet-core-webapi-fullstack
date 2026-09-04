@@ -260,4 +260,25 @@ public class KnowledgeRagConfiguration
     public double MinSimilarity { get; set; } = 0.45;
 
     public int StuckAfterSeconds { get; set; } = 120;
+
+    /// <summary>When true, fuse vector + Postgres full-text with RRF.</summary>
+    public bool HybridEnabled { get; set; } = false;
+
+    public int VectorCandidateLimit { get; set; } = 40;
+
+    public int LexicalCandidateLimit { get; set; } = 40;
+
+    public int RrfK { get; set; } = 60;
+
+    /// <summary>When true, LLM rewrites the search query before retrieval.</summary>
+    public bool EnableQueryRewrite { get; set; } = false;
+
+    /// <summary>When true, allow a second retrieve+generate round on insufficient context.</summary>
+    public bool EnableAgenticRetrieve { get; set; } = false;
+
+    /// <summary>When true, accept PDF uploads and extract text during parse.</summary>
+    public bool EnablePdfIngest { get; set; } = false;
+
+    /// <summary>When true, re-upload of the same filename replaces the prior document for that owner.</summary>
+    public bool EnableReIngest { get; set; } = false;
 }

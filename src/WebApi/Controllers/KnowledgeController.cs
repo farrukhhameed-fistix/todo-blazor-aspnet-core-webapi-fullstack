@@ -45,22 +45,41 @@ public class KnowledgeController : ControllerBase
     {
         if (file is null || file.Length == 0)
         {
-            return BadRequest(new ProblemDetails { Detail = "A .txt or .md file is required." });
+            return BadRequest(new ProblemDetails { Detail = "A .txt, .md, or .pdf file is required." });
         }
 
         try
         {
-            await using var stream = file.OpenReadStream();
-            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-            var content = await reader.ReadToEndAsync();
+            var extension = Path.GetExtension(file.FileName);
+            var isPdf = string.Equals(extension, ".pdf", StringComparison.OrdinalIgnoreCase);
 
-            var result = await _mediator.Send(new UploadKnowledgeDocumentCommand
+            UploadKnowledgeDocumentCommand command;
+            if (isPdf)
             {
-                FileName = file.FileName,
-                ContentType = file.ContentType ?? string.Empty,
-                Content = content
-            });
+                await using var stream = file.OpenReadStream();
+                using var ms = new MemoryStream();
+                await stream.CopyToAsync(ms);
+                command = new UploadKnowledgeDocumentCommand
+                {
+                    FileName = file.FileName,
+                    ContentType = file.ContentType ?? "application/pdf",
+                    BinaryContent = ms.ToArray()
+                };
+            }
+            else
+            {
+                await using var stream = file.OpenReadStream();
+                using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+                var content = await reader.ReadToEndAsync();
+                command = new UploadKnowledgeDocumentCommand
+                {
+                    FileName = file.FileName,
+                    ContentType = file.ContentType ?? string.Empty,
+                    Content = content
+                };
+            }
 
+            var result = await _mediator.Send(command);
             return Ok(result.Payload);
         }
         catch (FeatureDisabledException ex)

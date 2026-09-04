@@ -2,6 +2,8 @@
 
 using System.Reflection;
 using Fistix.TaskManager.AiLayer.Abstractions;
+using Fistix.TaskManager.AiLayer.Implementations;
+using Fistix.TaskManager.AiLayer.Models;
 using Fistix.TaskManager.AiLayer.Shared;
 using Fistix.TaskManager.Core.Abstractions.Repositories;
 using Fistix.TaskManager.Core.Abstractions.Services;
@@ -102,19 +104,8 @@ public class KnowledgeIngestAndQueryTests
     public async Task Query_EmptyHits_InsufficientContext()
     {
         var (_, user) = CreateUser();
-        var pipeline = new Fistix.TaskManager.AiLayer.Implementations.RAGPipeline(
-            new FakeLlm(),
-            EnabledConfig(),
-            NullLogger<Fistix.TaskManager.AiLayer.Implementations.RAGPipeline>.Instance);
-
-        var handler = new KnowledgeQueryCommandHandler(
-            pipeline,
-            new FakeEmbeddingService(),
-            new FakeDocumentRepository(),
-            new FakeEmbeddingRepository(),
-            user,
-            EnabledConfig(),
-            NullLogger<KnowledgeQueryCommandHandler>.Instance);
+        var embeddings = new FakeEmbeddingRepository();
+        var handler = CreateQueryHandler(user, new FakeDocumentRepository(), embeddings);
 
         var result = await handler.Handle(new KnowledgeQueryCommand { Question = "What is Auth0?" }, CancellationToken.None);
 
@@ -133,23 +124,81 @@ public class KnowledgeIngestAndQueryTests
             Guid.NewGuid(), 1, Guid.NewGuid(), "other.md", 0, "secret", null, 0.01));
         embeddings.ExpectedOwner = owner;
 
-        var pipeline = new Fistix.TaskManager.AiLayer.Implementations.RAGPipeline(
-            new FakeLlm { Response = "ok" },
-            EnabledConfig(),
-            NullLogger<Fistix.TaskManager.AiLayer.Implementations.RAGPipeline>.Instance);
-
-        var handler = new KnowledgeQueryCommandHandler(
-            pipeline,
-            new FakeEmbeddingService(),
-            new FakeDocumentRepository(),
-            embeddings,
-            user,
-            EnabledConfig(),
-            NullLogger<KnowledgeQueryCommandHandler>.Instance);
+        var handler = CreateQueryHandler(user, new FakeDocumentRepository(), embeddings);
 
         await handler.Handle(new KnowledgeQueryCommand { Question = "secret?" }, CancellationToken.None);
         Assert.Equal(owner, embeddings.LastOwner);
         Assert.NotEqual(other, embeddings.LastOwner);
+    }
+
+    [Fact]
+    public async Task Upload_ReIngest_ReplacesSameFileName()
+    {
+        var (owner, user) = CreateUser();
+        var docs = new FakeDocumentRepository();
+        var existing = NewDocument(5, owner, "old text");
+        existing.FileName = "notes.md";
+        docs.Items.Add(existing);
+
+        var config = EnabledConfig();
+        config.Features.KnowledgeRag.EnableReIngest = true;
+        var handler = new UploadKnowledgeDocumentCommandHandler(
+            docs,
+            new FakeJobRepository(),
+            user,
+            config,
+            NullLogger<UploadKnowledgeDocumentCommandHandler>.Instance);
+
+        await handler.Handle(new UploadKnowledgeDocumentCommand
+        {
+            FileName = "notes.md",
+            Content = "new text about Auth0"
+        }, CancellationToken.None);
+
+        Assert.DoesNotContain(docs.Items, d => d.Id == 5);
+        Assert.Contains(docs.Items, d => d.FileName == "notes.md" && d.ExtractedText.Contains("new text"));
+    }
+
+    private static KnowledgeQueryCommandHandler CreateQueryHandler(
+        FakeCurrentUserService user,
+        FakeDocumentRepository docs,
+        FakeEmbeddingRepository embeddings)
+    {
+        var config = EnabledConfig();
+        var pipeline = new Fistix.TaskManager.AiLayer.Implementations.RAGPipeline(
+            new FakeLlm(),
+            config,
+            NullLogger<Fistix.TaskManager.AiLayer.Implementations.RAGPipeline>.Instance);
+
+        var search = new KnowledgeSemanticSearchPipeline(
+            new FakeEmbeddingService(),
+            embeddings,
+            new FakeLexicalSearchRepository(),
+            config,
+            NullLogger<KnowledgeSemanticSearchPipeline>.Instance);
+
+        var rewriter = new KnowledgeQueryRewriter(
+            new FakeLlm { Response = "Auth0" },
+            NullLogger<KnowledgeQueryRewriter>.Instance);
+
+        var todoSearch = new Fistix.TaskManager.AiLayer.Implementations.SemanticSearchPipeline(
+            new FakeEmbeddingService(),
+            new FakeVectorStore(),
+            new FakeLexicalTodoSearch(),
+            config,
+            NullLogger<Fistix.TaskManager.AiLayer.Implementations.SemanticSearchPipeline>.Instance);
+
+        return new KnowledgeQueryCommandHandler(
+            pipeline,
+            new FakeEmbeddingService(),
+            search,
+            rewriter,
+            todoSearch,
+            new FakeTodoTaskRepository(),
+            docs,
+            user,
+            config,
+            NullLogger<KnowledgeQueryCommandHandler>.Instance);
     }
 
     [Fact]
@@ -289,6 +338,14 @@ public class KnowledgeIngestAndQueryTests
         public Task<IReadOnlyList<KnowledgeDocument>> ListByOwnerAsync(Guid ownerExternalId, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<KnowledgeDocument>>(Items.Where(d => d.CreatedByUserId == ownerExternalId).ToList());
 
+        public Task<KnowledgeDocument?> FindByOwnerAndFileNameAsync(
+            Guid ownerExternalId,
+            string fileName,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(Items.FirstOrDefault(d =>
+                d.CreatedByUserId == ownerExternalId
+                && string.Equals(d.FileName, fileName, StringComparison.OrdinalIgnoreCase)));
+
         public Task DeleteAsync(KnowledgeDocument document, CancellationToken cancellationToken)
         {
             Items.Remove(document);
@@ -346,10 +403,15 @@ public class KnowledgeIngestAndQueryTests
             Guid ownerExternalId,
             int limit,
             CancellationToken cancellationToken,
-            Guid? documentExternalId = null)
+            Guid? documentExternalId = null,
+            IReadOnlyCollection<Guid>? excludeChunkExternalIds = null)
         {
             LastOwner = ownerExternalId;
-            var owned = Hits.Where(_ => ExpectedOwner is null || ownerExternalId == ExpectedOwner).Take(limit).ToList();
+            var owned = Hits
+                .Where(_ => ExpectedOwner is null || ownerExternalId == ExpectedOwner)
+                .Where(h => excludeChunkExternalIds is null || !excludeChunkExternalIds.Contains(h.ChunkExternalId))
+                .Take(limit)
+                .ToList();
             return Task.FromResult<IReadOnlyList<KnowledgeChunkSearchHit>>(owned);
         }
     }
@@ -379,5 +441,62 @@ public class KnowledgeIngestAndQueryTests
 
         public Task<IReadOnlyList<KnowledgeIngestJob>> GetStaleRunningAsync(TimeSpan staleAfter, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<KnowledgeIngestJob>>([]);
+    }
+
+    private sealed class FakeLexicalSearchRepository : IKnowledgeLexicalSearchRepository
+    {
+        public Task<IReadOnlyList<KnowledgeLexicalSearchHit>> SearchAsync(
+            string query,
+            Guid ownerExternalId,
+            int limit,
+            CancellationToken cancellationToken,
+            Guid? documentExternalId = null,
+            IReadOnlyCollection<Guid>? excludeChunkExternalIds = null) =>
+            Task.FromResult<IReadOnlyList<KnowledgeLexicalSearchHit>>([]);
+    }
+
+    private sealed class FakeVectorStore : IVectorStore
+    {
+        public Task UpsertTodoEmbeddingAsync(int todoId, float[] embedding, string model, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+
+        public Task<IReadOnlyList<VectorSearchHit>> SearchAsync(
+            float[] queryEmbedding,
+            string embeddingModel,
+            Guid? ownerExternalId,
+            int limit,
+            CancellationToken cancellationToken = default,
+            IReadOnlyCollection<Guid>? allowedExternalIds = null) =>
+            Task.FromResult<IReadOnlyList<VectorSearchHit>>([]);
+    }
+
+    private sealed class FakeLexicalTodoSearch : ILexicalTodoSearch
+    {
+        public Task<IReadOnlyList<LexicalSearchHit>> SearchAsync(
+            string query,
+            Guid? ownerExternalId,
+            int limit,
+            IReadOnlyCollection<Guid>? allowedExternalIds = null,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<LexicalSearchHit>>([]);
+    }
+
+    private sealed class FakeTodoTaskRepository : ITodoTaskRepository
+    {
+        public Task<bool> Create(TodoTask todoTask, CancellationToken cancellationToken) => Task.FromResult(true);
+        public Task CreateManyAsync(IReadOnlyList<TodoTask> todoTasks, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<bool> Update(TodoTask todoTask, CancellationToken calcellationToken) => Task.FromResult(true);
+        public Task<bool> Delete(Guid id, CancellationToken cancellationToken) => Task.FromResult(true);
+        public Task<int> DeleteByImportTagAsync(Guid ownerExternalId, string importTag, CancellationToken cancellationToken) => Task.FromResult(0);
+        public Task<TodoTask> Get(Guid id, CancellationToken cancellationToken) => Task.FromResult(new TodoTask());
+        public Task<List<TodoTask>> GetAll(CancellationToken cancellationToken) => Task.FromResult(new List<TodoTask>());
+        public Task<List<TodoTask>> GetByOwner(Guid ownerExternalId, CancellationToken cancellationToken) =>
+            Task.FromResult(new List<TodoTask>());
+        public Task<List<TodoTask>> GetByOwnerAndImportTagAsync(Guid ownerExternalId, string importTag, CancellationToken cancellationToken) =>
+            Task.FromResult(new List<TodoTask>());
+        public Task<IReadOnlyList<TodoImportBatchSummary>> GetImportBatchesByOwnerAsync(
+            Guid ownerExternalId,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<TodoImportBatchSummary>>([]);
     }
 }

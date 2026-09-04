@@ -96,6 +96,53 @@ public sealed class SprintPlanningTools
         _toolInvocationCount = 0;
 
         var todos = await _todoTaskRepository.GetByOwner(ownerId, cancellationToken);
+        ApplyCandidates(todos, ownerId, maxTasks, durationDays, name, multiAgent, maxToolInvocations);
+    }
+
+    public void ConfigureFromWorkflow(
+        SprintWorkflowRequest request,
+        bool multiAgent,
+        int maxToolInvocations = 12)
+    {
+        ApplyCandidates(
+            request.Candidates.ToList(),
+            request.OwnerId,
+            request.MaxTasks,
+            request.DurationDays,
+            request.Name,
+            multiAgent,
+            maxToolInvocations);
+    }
+
+    private void ApplyCandidates(
+        List<TodoTask> todos,
+        Guid ownerId,
+        int maxTasks,
+        int durationDays,
+        string? name,
+        bool multiAgent,
+        int maxToolInvocations)
+    {
+        _ownerId = ownerId;
+        _maxTasks = Math.Clamp(maxTasks, 1, 50);
+        _durationDays = Math.Clamp(durationDays, 1, 90);
+        _maxToolInvocations = Math.Max(1, maxToolInvocations);
+        UseMultiAgentLabels = multiAgent;
+        var start = DateTime.UtcNow.Date;
+        _sprintName = string.IsNullOrWhiteSpace(name)
+            ? $"Optimized Sprint {start:yyyy-MM-dd}"
+            : name.Trim();
+
+        CreatedSprintId = null;
+        CreatedSprintName = null;
+        CreatedStartDate = null;
+        CreatedEndDate = null;
+        SelectedTodos.Clear();
+        LastProposeReasoning = string.Empty;
+        Steps.Clear();
+        BudgetExceeded = false;
+        _toolInvocationCount = 0;
+
         _candidates = todos
             .Where(IsCandidate)
             .OrderBy(t => string.Equals(t.Priority, "High", StringComparison.OrdinalIgnoreCase) ? 0 : 1)

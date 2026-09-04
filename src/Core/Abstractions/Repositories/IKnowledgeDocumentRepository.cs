@@ -20,5 +20,10 @@ public interface IKnowledgeDocumentRepository
 
     Task<IReadOnlyList<KnowledgeDocument>> ListByOwnerAsync(Guid ownerExternalId, CancellationToken cancellationToken);
 
+    Task<KnowledgeDocument?> FindByOwnerAndFileNameAsync(
+        Guid ownerExternalId,
+        string fileName,
+        CancellationToken cancellationToken);
+
     Task DeleteAsync(KnowledgeDocument document, CancellationToken cancellationToken);
 }

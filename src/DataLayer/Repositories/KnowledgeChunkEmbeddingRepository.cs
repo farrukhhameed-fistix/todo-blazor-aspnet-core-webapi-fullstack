@@ -53,7 +53,8 @@ public sealed class KnowledgeChunkEmbeddingRepository : IKnowledgeChunkEmbedding
         Guid ownerExternalId,
         int limit,
         CancellationToken cancellationToken,
-        Guid? documentExternalId = null)
+        Guid? documentExternalId = null,
+        IReadOnlyCollection<Guid>? excludeChunkExternalIds = null)
     {
         var queryVector = new Vector(queryEmbedding);
         var query = _context.KnowledgeChunkEmbeddings
@@ -66,6 +67,12 @@ public sealed class KnowledgeChunkEmbeddingRepository : IKnowledgeChunkEmbedding
         if (documentExternalId.HasValue)
         {
             query = query.Where(e => e.Chunk!.Document!.ExternalId == documentExternalId.Value);
+        }
+
+        if (excludeChunkExternalIds is { Count: > 0 })
+        {
+            var exclude = excludeChunkExternalIds.ToArray();
+            query = query.Where(e => !exclude.Contains(e.Chunk!.ExternalId));
         }
 
         var hits = await query

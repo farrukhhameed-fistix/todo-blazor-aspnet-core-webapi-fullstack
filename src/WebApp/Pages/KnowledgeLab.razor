@@ -10,7 +10,7 @@
 
 <MudText Typo="Typo.h4" GutterBottom="true">Knowledge Lab</MudText>
 <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-4">
-  Upload a text or Markdown file, watch parse → chunk → embed, then ask questions grounded in your documents.
+  Upload a text, Markdown, or PDF file, watch parse → chunk → embed, then ask questions grounded in your documents.
 </MudText>
 
 <MudGrid>
@@ -18,10 +18,10 @@
     <MudPaper Class="pa-4 mb-4" Elevation="1">
       <MudText Typo="Typo.h6" Class="mb-3">1. Upload</MudText>
       <MudStack Spacing="3">
-        <MudFileUpload T="IBrowserFile" Accept=".txt,.md,text/plain,text/markdown" FilesChanged="OnFileSelected">
+        <MudFileUpload T="IBrowserFile" Accept=".txt,.md,.pdf,text/plain,text/markdown,application/pdf" FilesChanged="OnFileSelected">
           <ActivatorContent>
             <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.UploadFile">
-              @(_selectedFile?.Name ?? "Choose .txt or .md")
+              @(_selectedFile?.Name ?? "Choose .txt, .md, or .pdf")
             </MudButton>
           </ActivatorContent>
         </MudFileUpload>
@@ -94,6 +94,7 @@
                       Variant="Variant.Outlined"
                       Lines="3"
                       Placeholder="@(_selectedDocument is null ? "Ask across all your documents" : $"Ask about {_selectedDocument.FileName}")" />
+        <MudSwitch @bind-Value="_includeTodos" Label="Include my todos" Color="Color.Primary" />
         <MudStack Row="true" Spacing="2">
           <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_busy" OnClick="AskAsync">Ask</MudButton>
           @if (_selectedDocument is not null)
@@ -115,19 +116,40 @@
               {
                 <MudChip T="string" Size="Size.Small" Class="ma-1"
                          OnClick="@(() => OpenChunkFromSource(source))">
-                  @source.FileName #@(source.Ordinal + 1)
+                  @(source.SourceKind == "todo" ? $"Todo: {source.FileName}" : $"{source.FileName} #{source.Ordinal + 1}")
                 </MudChip>
               }
             }
             <MudExpansionPanels Class="mt-3" Elevation="0">
               <MudExpansionPanel Text="RAG trace">
                 <MudText Typo="Typo.caption">Sanitize: @_answer.Trace.SanitizedQuestion</MudText>
-                <MudText Typo="Typo.caption">Embed: @_answer.Trace.EmbeddingModel</MudText>
-                <MudText Typo="Typo.caption">Hits: @_answer.Trace.HitCount · Outcome: @_answer.Trace.Outcome</MudText>
+                @if (!string.IsNullOrWhiteSpace(_answer.Trace.RewrittenQuery))
+                {
+                  <MudText Typo="Typo.caption">Rewrite: @_answer.Trace.RewrittenQuery</MudText>
+                }
+                <MudText Typo="Typo.caption">
+                  Embed: @_answer.Trace.EmbeddingModel · Chat: @_answer.Trace.ChatModel
+                </MudText>
+                <MudText Typo="Typo.caption">
+                  Hybrid: @_answer.Trace.HybridEnabled · Todos: @_answer.Trace.IncludeTodos ·
+                  Hits: @_answer.Trace.HitCount · Rounds: @_answer.Trace.RetrieveRounds ·
+                  Outcome: @_answer.Trace.Outcome
+                </MudText>
+                <MudText Typo="Typo.caption">
+                  Candidates — vector: @_answer.Trace.VectorCandidateCount · lexical: @_answer.Trace.LexicalCandidateCount
+                </MudText>
+                @foreach (var round in _answer.Trace.Rounds)
+                {
+                  <MudText Typo="Typo.caption">
+                    Round @round.Round: "@round.SearchQuery" → @round.HitCount hits (@round.CandidateCount candidates)
+                  </MudText>
+                }
                 @foreach (var hit in _answer.Trace.Hits)
                 {
                   <MudText Typo="Typo.caption">
                     @hit.FileName #@(hit.Ordinal + 1) — similarity @hit.Similarity.ToString("0.00")
+                    @(hit.FromVector ? " [V]" : "")@(hit.FromLexical ? " [L]" : "")
+                    @(hit.SourceKind == "todo" ? " (todo)" : "")
                   </MudText>
                 }
               </MudExpansionPanel>
@@ -167,6 +189,7 @@
   private KnowledgeDocumentDto? _selectedDocument;
   private List<KnowledgeChunkDto> _chunks = [];
   private string _question = string.Empty;
+  private bool _includeTodos;
   private KnowledgeQueryResponseDto? _answer;
   private Timer? _pollTimer;
 
@@ -272,7 +295,7 @@
     _busy = true;
     try
     {
-      var result = await KnowledgeDataService.QueryAsync(_question, _selectedDocument?.ExternalId);
+      var result = await KnowledgeDataService.QueryAsync(_question, _selectedDocument?.ExternalId, _includeTodos);
       if (!result.IsSucceed || result.Payload is null)
       {
         Snackbar.Add(result.Message ?? "Ask failed", Severity.Error);
@@ -286,6 +309,11 @@
 
   private void OpenChunkFromSource(KnowledgeQuerySourceDto source)
   {
+    if (string.Equals(source.SourceKind, "todo", StringComparison.OrdinalIgnoreCase))
+    {
+      return;
+    }
+
     var match = _documents.FirstOrDefault(d => d.ExternalId == source.DocumentExternalId);
     if (match is not null)
     {

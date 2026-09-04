@@ -110,6 +110,7 @@ namespace Fistix.TaskManager.DataLayer
         entityModel.Property(p => p.Name).HasMaxLength(200);
         entityModel.Property(p => p.StatusMessage).HasMaxLength(500);
         entityModel.Property(p => p.LastError).HasMaxLength(2000);
+        entityModel.Property(p => p.PendingRequestId).HasMaxLength(200);
       });
     }
     private void UserProfileModelConfig(ModelBuilder modelBuilder)

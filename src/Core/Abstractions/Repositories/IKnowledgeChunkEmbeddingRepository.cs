@@ -17,7 +17,8 @@ public interface IKnowledgeChunkEmbeddingRepository
         Guid ownerExternalId,
         int limit,
         CancellationToken cancellationToken,
-        Guid? documentExternalId = null);
+        Guid? documentExternalId = null,
+        IReadOnlyCollection<Guid>? excludeChunkExternalIds = null);
 }
 
 public sealed record KnowledgeChunkSearchHit(

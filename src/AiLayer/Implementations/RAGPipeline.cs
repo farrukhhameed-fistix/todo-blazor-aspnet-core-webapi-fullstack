@@ -38,16 +38,21 @@ public sealed class RAGPipeline
     {
         var model = ResolveChatModel(_aiConfig);
         using var operation = _telemetry.StartOperation(
-            request.CorpusKind == RagCorpusKind.Knowledge
-                ? AiTelemetryNames.Features.KnowledgeRag
-                : AiTelemetryNames.Features.Rag,
+            request.CorpusKind == RagCorpusKind.Todos
+                ? AiTelemetryNames.Features.Rag
+                : AiTelemetryNames.Features.KnowledgeRag,
             model: model,
             provider: _aiConfig.Provider);
         operation.Activity?.SetTag(
             AiTelemetryNames.Tags.PromptVersion,
-            request.CorpusKind == RagCorpusKind.Knowledge ? AiPromptVersions.KnowledgeRag : AiPromptVersions.Rag);
+            request.CorpusKind switch
+            {
+                RagCorpusKind.Knowledge => AiPromptVersions.KnowledgeRag,
+                RagCorpusKind.Unified => AiPromptVersions.KnowledgeRag,
+                _ => AiPromptVersions.Rag
+            });
 
-        if (request.CorpusKind == RagCorpusKind.Knowledge)
+        if (request.CorpusKind is RagCorpusKind.Knowledge or RagCorpusKind.Unified)
         {
             return await ExecuteKnowledgeAsync(request, model, operation, cancellationToken);
         }
@@ -289,7 +294,20 @@ public sealed class RAGPipeline
                 }
             }
 
-            var prompt = $"""
+            var prompt = request.CorpusKind == RagCorpusKind.Unified
+                ? $"""
+                You are a knowledge-base assistant with access to uploaded documents and the user's todos.
+                Answer the user's question using ONLY the provided context items (document chunks and/or todos).
+                If the context is insufficient, say what is missing. Be concise and cite titles with their ids.
+                Do not invent GUIDs. Only reference ids that appear in the context.
+                When listing or quoting, cite ONLY items that match the question. If none match, say so clearly.
+
+                Context:
+                {contextBuilder}
+
+                Question: {sanitizedQuestion}
+                """
+                : $"""
                 You are a knowledge-base assistant. Answer the user's question using ONLY the provided document chunks.
                 If the context is insufficient, say what is missing. Be concise and cite chunk titles with their ids.
                 Do not invent GUIDs. Only reference ids that appear in the document context.
