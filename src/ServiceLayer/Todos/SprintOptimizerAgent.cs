@@ -21,7 +21,7 @@ namespace Fistix.TaskManager.ServiceLayer.Todos;
 
 /// <summary>
 /// Microsoft Agent Framework sprint planner.
-/// Default: Analyst → Planner sequential workflow. Optional single-agent mode via Ai:Agents:WorkflowMode.
+/// Default: Analyst → Planner via MAF WorkflowBuilder. Optional single-agent mode via Ai:Agents:WorkflowMode.
 /// Falls back to heuristic selection when the agent run fails.
 /// </summary>
 public class SprintOptimizerAgent
@@ -234,127 +234,24 @@ public class SprintOptimizerAgent
         Func<string, string?, AnalystOutput?, CancellationToken, Task>? onPhaseChanged,
         SprintOptimizerCheckpointDto? resumeFrom = null)
     {
-        if (_aiConfig.Agents?.UseWorkflowGraph == true)
-        {
-            var workflowResult = await _workflowHost.RunSequentialAsync(
-                chatClient,
-                goal,
-                maxTasks,
-                workflowRequest,
-                AnalystInstructions,
-                PlannerInstructions,
-                cancellationToken,
-                onPhaseChanged,
-                resumeFrom);
+        var (response, analystOutput) = await _workflowHost.RunSequentialAsync(
+            chatClient,
+            goal,
+            maxTasks,
+            workflowRequest,
+            AnalystInstructions,
+            PlannerInstructions,
+            cancellationToken,
+            onPhaseChanged,
+            resumeFrom);
 
-            _logger.LogInformation(
-                "MAF workflow graph complete. Selected={Selected}",
-                _tools.SelectedTodos.Count);
-
-            return workflowResult;
-        }
-
-        _logger.LogInformation("Running MAF Analyst → Planner sequential workflow");
-
-        AIAgent analyst = chatClient.AsAIAgent(
-            instructions: AnalystInstructions,
-            name: "SprintAnalyst",
-            description: "Analyzes incomplete todos and workload for sprint planning.",
-            tools:
-            [
-                AIFunctionFactory.Create(_tools.SearchIncompleteTodos),
-                AIFunctionFactory.Create(_tools.GetWorkloadStats),
-                AIFunctionFactory.Create(_tools.FindDueSoonTodos)
-            ]);
-
-        _tools.Steps.Add(new AgentStepDto
-        {
-            AgentName = "Workflow",
-            ToolName = "sequential_start",
-            Summary = "Analyst → Planner"
-        });
-
-        AnalystOutput analystOutput;
-        if (resumeFrom?.AnalystOutput is not null
-            && string.Equals(resumeFrom.CurrentPhase, SprintOptimizerPhase.Planner, StringComparison.OrdinalIgnoreCase))
-        {
-            foreach (var step in resumeFrom.Steps)
-            {
-                if (!_tools.Steps.Any(s => s.ToolName == step.ToolName && s.AgentName == step.AgentName))
-                {
-                    _tools.Steps.Add(step);
-                }
-            }
-
-            analystOutput = resumeFrom.AnalystOutput;
-            if (onPhaseChanged is not null)
-            {
-                await onPhaseChanged(
-                    SprintOptimizerPhase.Planner,
-                    "Resuming planner from checkpoint…",
-                    analystOutput,
-                    cancellationToken);
-            }
-        }
-        else
-        {
-            if (onPhaseChanged is not null)
-            {
-                await onPhaseChanged(SprintOptimizerPhase.Analyst, "Analyst is reviewing workload…", null, cancellationToken);
-            }
-
-            _tools.SetActiveAgentRole("Analyst");
-            var analystResponse = await analyst.RunAsync(goal, cancellationToken: cancellationToken);
-            EnsureToolStepsPresent(analystResponse);
-
-            var analystBrief = LlmOutputValidator.ValidateAgentText(
-                string.IsNullOrWhiteSpace(analystResponse.Text)
-                    ? "Analyst did not return a summary. Prioritize High priority and earliest due dates."
-                    : analystResponse.Text);
-
-            analystOutput = SprintCapacityCritic.Apply(
-                AnalystOutputParser.Parse(
-                    analystBrief,
-                    _tools.CandidateExternalIds,
-                    workflowRequest.Stats),
-                workflowRequest.Candidates.ToList(),
-                maxTasks,
-                workflowRequest.DurationDays);
-
-            _logger.LogInformation(
-                "Analyst phase complete. Tool steps={StepCount}, recommended={Recommended}",
-                _tools.Steps.Count,
-                analystOutput.RecommendedIds.Count);
-        }
-
-        cancellationToken.ThrowIfCancellationRequested();
-
-        var plannerGoal = BuildPlannerGoal(goal, analystOutput, maxTasks);
-
-        if (onPhaseChanged is not null)
-        {
-            await onPhaseChanged(SprintOptimizerPhase.Planner, "Planner is selecting tasks for proposal…", analystOutput, cancellationToken);
-        }
-
-        _tools.SetActiveAgentRole("Planner");
-        AIAgent planner = chatClient.AsAIAgent(
-            instructions: PlannerInstructions,
-            name: "SprintPlanner",
-            description: "Proposes and creates a sprint from the Analyst report.",
-            tools:
-            [
-                AIFunctionFactory.Create(_tools.SearchIncompleteTodos),
-                AIFunctionFactory.Create(_tools.ProposeSprintPlan)
-            ]);
-
-        var plannerResponse = await planner.RunAsync(plannerGoal, cancellationToken: cancellationToken);
-        EnsureToolStepsPresent(plannerResponse);
+        EnsureToolStepsPresent(response);
 
         _logger.LogInformation(
-            "Planner phase complete. Selected={Selected}",
+            "MAF Analyst → Planner workflow complete. Selected={Selected}",
             _tools.SelectedTodos.Count);
 
-        return (plannerResponse, analystOutput);
+        return (response, analystOutput);
     }
 
     private async Task TryRecoverPlannerSelectionAsync(
@@ -401,34 +298,6 @@ public class SprintOptimizerAgent
         _tools.SetActiveAgentRole("Planner");
         var recoveryResponse = await planner.RunAsync(recoveryGoal, cancellationToken: cancellationToken);
         EnsureToolStepsPresent(recoveryResponse);
-    }
-
-    private string BuildPlannerGoal(string goal, AnalystOutput analyst, int maxTasks)
-    {
-        var idHint = analyst.RecommendedIds.Count == 0
-            ? (_tools.CandidateExternalIds.Count == 0
-                ? "No candidates loaded."
-                : string.Join(", ", _tools.CandidateExternalIds.Take(Math.Min(_tools.CandidateExternalIds.Count, maxTasks * 2))))
-            : string.Join(", ", analyst.RecommendedIds.Take(maxTasks));
-
-        var risks = analyst.Risks.Count == 0
-            ? "None noted."
-            : string.Join("; ", analyst.Risks);
-
-        return $"""
-            {goal}
-
-            --- Analyst report ---
-            {analyst.Summary}
-
-            Theme: {(string.IsNullOrWhiteSpace(analyst.Theme) ? "n/a" : analyst.Theme)}
-            Risks: {risks}
-
-            --- Valid todo external GUIDs (use only these in propose_sprint_plan, max {maxTasks}) ---
-            {idHint}
-
-            Call propose_sprint_plan before finishing.
-            """;
     }
 
     private async Task<AgentResponse> RunSingleAgentAsync(

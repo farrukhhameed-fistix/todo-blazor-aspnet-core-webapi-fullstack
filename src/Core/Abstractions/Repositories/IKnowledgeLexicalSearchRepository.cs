@@ -7,13 +7,10 @@ using System.Threading.Tasks;
 
 namespace Fistix.TaskManager.Core.Abstractions.Repositories;
 
-public interface IKnowledgeChunkEmbeddingRepository
+public interface IKnowledgeLexicalSearchRepository
 {
-    Task UpsertAsync(int chunkId, float[] embedding, string model, CancellationToken cancellationToken);
-
-    Task<IReadOnlyList<KnowledgeChunkSearchHit>> SearchSimilarAsync(
-        float[] queryEmbedding,
-        string embeddingModel,
+    Task<IReadOnlyList<KnowledgeLexicalSearchHit>> SearchAsync(
+        string query,
         Guid ownerExternalId,
         int limit,
         CancellationToken cancellationToken,
@@ -21,7 +18,7 @@ public interface IKnowledgeChunkEmbeddingRepository
         IReadOnlyCollection<Guid>? excludeChunkExternalIds = null);
 }
 
-public sealed record KnowledgeChunkSearchHit(
+public sealed record KnowledgeLexicalSearchHit(
     Guid ChunkExternalId,
     int ChunkId,
     Guid DocumentExternalId,
@@ -29,4 +26,4 @@ public sealed record KnowledgeChunkSearchHit(
     int Ordinal,
     string Content,
     string? Heading,
-    double Distance);
+    double Rank);

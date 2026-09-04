@@ -58,16 +58,34 @@ public class KnowledgeRagTraceHitDto
     public string FileName { get; set; } = string.Empty;
     public int Ordinal { get; set; }
     public double Similarity { get; set; }
+    public bool FromVector { get; set; }
+    public bool FromLexical { get; set; }
+    public string SourceKind { get; set; } = "document";
+}
+
+public class KnowledgeRagRetrieveRoundDto
+{
+    public int Round { get; set; }
+    public string SearchQuery { get; set; } = string.Empty;
+    public int HitCount { get; set; }
+    public int CandidateCount { get; set; }
 }
 
 public class KnowledgeRagTraceDto
 {
     public string SanitizedQuestion { get; set; } = string.Empty;
+    public string? RewrittenQuery { get; set; }
+    public bool HybridEnabled { get; set; }
+    public bool IncludeTodos { get; set; }
     public string EmbeddingModel { get; set; } = string.Empty;
     public string ChatModel { get; set; } = string.Empty;
     public int HitCount { get; set; }
+    public int VectorCandidateCount { get; set; }
+    public int LexicalCandidateCount { get; set; }
+    public int RetrieveRounds { get; set; } = 1;
     public string Outcome { get; set; } = string.Empty;
     public List<KnowledgeRagTraceHitDto> Hits { get; set; } = [];
+    public List<KnowledgeRagRetrieveRoundDto> Rounds { get; set; } = [];
 }
 
 public class KnowledgeQuerySourceDto
@@ -79,6 +97,7 @@ public class KnowledgeQuerySourceDto
     public string? Heading { get; set; }
     public string Snippet { get; set; } = string.Empty;
     public double Similarity { get; set; }
+    public string SourceKind { get; set; } = "document";
 }
 
 public class KnowledgeQueryResponseDto

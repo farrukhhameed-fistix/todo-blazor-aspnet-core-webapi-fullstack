@@ -47,6 +47,8 @@ namespace Fistix.TaskManager.ServiceLayer
       services.TryAddSingleton<ISprintOptimizerNotifier, NullSprintOptimizerNotifier>();
       services.TryAddSingleton<IKnowledgeIngestNotifier, NullKnowledgeIngestNotifier>();
       services.AddScoped<IKnowledgeIngestProcessor, KnowledgeIngestProcessor>();
+      services.AddScoped<KnowledgeSemanticSearchPipeline>();
+      services.AddScoped<KnowledgeQueryRewriter>();
       services.AddHostedService<KnowledgeIngestBackgroundService>();
       services.TryAddSingleton<IAiTelemetry>(_ => NullAiTelemetry.Instance);
       services.AddHostedService<SprintOptimizerBackgroundService>();

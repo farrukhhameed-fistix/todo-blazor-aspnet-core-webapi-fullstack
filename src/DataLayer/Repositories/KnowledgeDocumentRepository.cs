@@ -50,6 +50,18 @@ public sealed class KnowledgeDocumentRepository : IKnowledgeDocumentRepository
             .ToListAsync(cancellationToken);
     }
 
+    public Task<KnowledgeDocument?> FindByOwnerAndFileNameAsync(
+        Guid ownerExternalId,
+        string fileName,
+        CancellationToken cancellationToken)
+    {
+        var normalized = fileName.Trim();
+        return _context.KnowledgeDocuments.FirstOrDefaultAsync(
+            d => d.CreatedByUserId == ownerExternalId
+                 && d.FileName.ToLower() == normalized.ToLower(),
+            cancellationToken);
+    }
+
     public async Task DeleteAsync(KnowledgeDocument document, CancellationToken cancellationToken)
     {
         _context.KnowledgeDocuments.Remove(document);

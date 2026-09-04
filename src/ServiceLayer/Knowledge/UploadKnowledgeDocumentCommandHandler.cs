@@ -22,7 +22,8 @@ namespace Fistix.TaskManager.ServiceLayer.Knowledge;
 public sealed class UploadKnowledgeDocumentCommandHandler
     : IRequestHandler<UploadKnowledgeDocumentCommand, UploadKnowledgeDocumentCommandResult>
 {
-    private static readonly string[] AllowedExtensions = [".txt", ".md"];
+    private static readonly string[] TextExtensions = [".txt", ".md"];
+    private static readonly string[] PdfExtensions = [".pdf"];
 
     private readonly IKnowledgeDocumentRepository _documents;
     private readonly IKnowledgeIngestJobRepository _jobs;
@@ -59,21 +60,61 @@ public sealed class UploadKnowledgeDocumentCommandHandler
         }
 
         var extension = Path.GetExtension(fileName);
-        if (!AllowedExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase))
+        var isPdf = PdfExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase);
+        var isText = TextExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase);
+        if (!isText && !isPdf)
+        {
+            throw new InvalidOperationException(
+                cfg.EnablePdfIngest
+                    ? "Only .txt, .md, and .pdf files are supported."
+                    : "Only .txt and .md files are supported.");
+        }
+
+        if (isPdf && !cfg.EnablePdfIngest)
         {
             throw new InvalidOperationException("Only .txt and .md files are supported.");
         }
 
-        var content = command.Content ?? string.Empty;
-        var size = System.Text.Encoding.UTF8.GetByteCount(content);
-        if (size > cfg.MaxUploadBytes)
+        string content;
+        long size;
+        if (isPdf)
         {
-            throw new InvalidOperationException($"File exceeds the {cfg.MaxUploadBytes} byte upload limit.");
+            var bytes = command.BinaryContent
+                        ?? throw new InvalidOperationException("PDF content is required.");
+            size = bytes.LongLength;
+            if (size > cfg.MaxUploadBytes)
+            {
+                throw new InvalidOperationException($"File exceeds the {cfg.MaxUploadBytes} byte upload limit.");
+            }
+
+            content = PdfTextExtractor.Extract(bytes);
+        }
+        else
+        {
+            content = command.Content ?? string.Empty;
+            size = System.Text.Encoding.UTF8.GetByteCount(content);
+            if (size > cfg.MaxUploadBytes)
+            {
+                throw new InvalidOperationException($"File exceeds the {cfg.MaxUploadBytes} byte upload limit.");
+            }
         }
 
         if (string.IsNullOrWhiteSpace(content))
         {
             throw new InvalidOperationException("File is empty.");
+        }
+
+        if (cfg.EnableReIngest)
+        {
+            var existing = await _documents.FindByOwnerAndFileNameAsync(userId, fileName, cancellationToken);
+            if (existing is not null)
+            {
+                _logger.LogInformation(
+                    "Re-ingest replacing document {DocumentId} ({FileName})",
+                    existing.ExternalId,
+                    existing.FileName);
+                await _documents.DeleteAsync(existing, cancellationToken);
+            }
         }
 
         var document = new KnowledgeDocument
@@ -132,8 +173,18 @@ public sealed class UploadKnowledgeDocumentCommandHandler
         }
     }
 
-    private static string InferContentType(string extension) =>
-        string.Equals(extension, ".md", StringComparison.OrdinalIgnoreCase)
-            ? "text/markdown"
-            : "text/plain";
+    private static string InferContentType(string extension)
+    {
+        if (string.Equals(extension, ".md", StringComparison.OrdinalIgnoreCase))
+        {
+            return "text/markdown";
+        }
+
+        if (string.Equals(extension, ".pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            return "application/pdf";
+        }
+
+        return "text/plain";
+    }
 }

@@ -15,7 +15,7 @@ using Microsoft.Extensions.Logging;
 namespace Fistix.TaskManager.ServiceLayer.Todos;
 
 /// <summary>
-/// Optional MAF WorkflowBuilder path for Analyst → Planner. HITL approval stays on the job row.
+/// MAF WorkflowBuilder host for Analyst → Planner. HITL approval stays on the job row.
 /// </summary>
 public sealed class SprintOptimizerWorkflowHost
 {

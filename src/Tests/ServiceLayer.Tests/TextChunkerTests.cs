@@ -52,4 +52,27 @@ public class TextChunkerTests
         Assert.Equal(0, chunks[0].Ordinal);
         Assert.Contains("Auth", chunks[0].Content);
     }
+
+    [Fact]
+    public void Split_TruncatesHeadingToMaxLength()
+    {
+        var longTitle = new string('A', TextChunker.MaxHeadingLength + 200);
+        var text = $"# {longTitle}\n\nBody about Auth0 silent refresh.";
+        var chunks = TextChunker.Split(text, chunkSize: 800, chunkOverlap: 100);
+
+        Assert.NotEmpty(chunks);
+        Assert.NotNull(chunks[0].Heading);
+        Assert.Equal(TextChunker.MaxHeadingLength, chunks[0].Heading!.Length);
+    }
+
+    [Fact]
+    public void Split_IgnoresHashWithoutSpace_AsHeading()
+    {
+        // PDF extractors sometimes emit "#Title" glued to body without a space after #.
+        var glued = "#" + new string('B', 600) + " Auth0 login";
+        var chunks = TextChunker.Split(glued, chunkSize: 800, chunkOverlap: 100);
+
+        Assert.NotEmpty(chunks);
+        Assert.Null(chunks[0].Heading);
+    }
 }

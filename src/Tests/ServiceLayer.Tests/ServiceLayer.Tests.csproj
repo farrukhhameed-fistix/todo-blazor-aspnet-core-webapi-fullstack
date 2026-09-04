@@ -19,6 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\AiLayer\AiLayer.csproj" />
     <ProjectReference Include="..\..\ServiceLayer\ServiceLayer.csproj" />
   </ItemGroup>
 

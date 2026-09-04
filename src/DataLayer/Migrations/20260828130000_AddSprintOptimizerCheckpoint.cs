@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -5,6 +6,8 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace Fistix.TaskManager.DataLayer.Migrations
 {
     /// <inheritdoc />
+    [DbContext(typeof(EfContext))]
+    [Migration("20260828130000_AddSprintOptimizerCheckpoint")]
     public partial class AddSprintOptimizerCheckpoint : Migration
     {
         /// <inheritdoc />

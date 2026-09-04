@@ -11,6 +11,9 @@ public class UploadKnowledgeDocumentCommand : IRequest<UploadKnowledgeDocumentCo
     public string FileName { get; set; } = string.Empty;
     public string ContentType { get; set; } = string.Empty;
     public string Content { get; set; } = string.Empty;
+
+    /// <summary>Raw bytes for binary uploads (PDF). When set, Content may be empty.</summary>
+    public byte[]? BinaryContent { get; set; }
 }
 
 public class UploadKnowledgeDocumentCommandResult
@@ -32,6 +35,9 @@ public class KnowledgeQueryCommand : IRequest<KnowledgeQueryCommandResult>
 {
     public string Question { get; set; } = string.Empty;
     public Guid? DocumentExternalId { get; set; }
+
+    /// <summary>When true, also retrieve owner-scoped todos and merge into the RAG corpus.</summary>
+    public bool IncludeTodos { get; set; }
 }
 
 public class KnowledgeQueryCommandResult

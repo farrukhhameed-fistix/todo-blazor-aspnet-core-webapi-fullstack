@@ -26,6 +26,7 @@ namespace Fistix.TaskManager.DataLayer
       services.AddScoped<IKnowledgeDocumentRepository, KnowledgeDocumentRepository>();
       services.AddScoped<IKnowledgeChunkRepository, KnowledgeChunkRepository>();
       services.AddScoped<IKnowledgeChunkEmbeddingRepository, KnowledgeChunkEmbeddingRepository>();
+      services.AddScoped<IKnowledgeLexicalSearchRepository, KnowledgeLexicalSearchRepository>();
       services.AddScoped<IKnowledgeIngestJobRepository, KnowledgeIngestJobRepository>();
       services.AddScoped<IUserProfileRepository, UserProfileRepository>();
       services.AddScoped<IRepositoryFactory, RepositoryFactory>();
